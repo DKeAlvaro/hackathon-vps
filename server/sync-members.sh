@@ -58,6 +58,11 @@ for f in "$KEYS_DIR"/*.pub; do
       log "skip $user: existing system account (uid $uid)"
       continue
     fi
+    # Only manage accounts this script created (e.g. never take over the cloud image's 'ubuntu' user).
+    if [ "$(getent passwd "$user" | cut -d: -f5)" != "hackathon member" ]; then
+      log "skip $user: existing account not created by the sync"
+      continue
+    fi
   fi
 
   valid_keys "$f" > "$tmp/keys.out"

@@ -82,6 +82,7 @@ commit private keys, and do not commit `keys/<username>.pub` for anyone but the 
 
 - Merge PRs that add `keys/<username>.pub` (check that the file name is the intended username and that
   it contains only public key lines). The VPS pulls `main` every minute and creates the account.
+  Never merge a PR that touches anything outside `keys/`: `server/` runs as root on the VPS every minute.
 - A user with push access can push to `main` directly (the connect script does that automatically).
 - Sync log on the server: `/var/log/hack-sync.log`. Cron file: `/etc/cron.d/hack-sync`. The clone is in
   `/opt/hackathon-vps`.
