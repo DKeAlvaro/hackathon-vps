@@ -34,7 +34,8 @@ git clone https://github.com/DKeAlvaro/hackathon-vps.git && cd hackathon-vps
 ```
 
 The script creates `~/.ssh/hack_ed25519`, registers the public key with the server using your code, adds a
-`hack` entry to `~/.ssh/config`, and tests `ssh hack`.
+`hack` entry to `~/.ssh/config`, tests `ssh hack`, and clones the team project into a `hackathon` folder next to
+this one (`--project-dir` / `-ProjectDir` to change it, `--no-project` / `-NoProject` to skip).
 
 ## Web tools
 
@@ -55,14 +56,27 @@ page (`WEB_URL` in `hack.conf`). The first HTTPS certificate can take about 30 s
 
 Files land in `~/hack/inbox/<you>/` on the VPS. Get files back with `scp -r hack:~/hack/<path> .`
 
+## How we work
+
+Everyone codes on their own machine with their own agent (Claude Code, Codex, ...) in the local `hackathon`
+clone. Nobody runs agents on the VPS: it has 6 GB RAM shared by 4 people.
+
+- `origin` is the VPS (`hack:/srv/hack/project.git`). Branch per task `<you>/<feature>`, push it, merge into
+  `main` often (`git pull --rebase` before pushing `main`). `main` cannot be force-pushed or deleted.
+- Every push to `main` updates the live checkout `~/hack/project` on the VPS (see it in the web Code/Files
+  tools) and mirrors to GitHub `DKeAlvaro/hackathon`. Never push to GitHub directly.
+- Several agents on one laptop: one `git worktree` per agent.
+- The VPS runs the shared demo/backend/database (`ssh hack`, `cd ~/hack/project`, bind `0.0.0.0` on
+  3000-3999/5000-5999/8000-8999, use tmux/`pair` or Docker) and holds shared files (`~/hack/`,
+  `~/hack/inbox/<you>/`). Do not edit files in `~/hack/project`: it is reset to `main` on every push.
+
 ## On the server
 
-- Shared folder `~/hack` (= `/srv/hack`): `project/` (clone of the private repo DKeAlvaro/hackathon, push works
-  from the VPS), `wt/` (worktrees per person), `inbox/<you>/`, `kit-agentes/`.
+- Shared folder `~/hack` (= `/srv/hack`): `project/` (live checkout of main), `project.git/` (central repo),
+  `inbox/<you>/`, `kit-agentes/`.
 - `pair` opens a tmux session everyone can join. VS Code / Cursor: Remote-SSH, host `hack`.
-- Run your own agent there: `ssh hack`, then `claude` or `codex`.
 - Installed: git, tmux, htop/btop, jq, ripgrep, fd, build tools, Python 3 + pip/venv/pipx/uv, Node.js 22,
-  Docker + compose, gh, Claude Code, Codex, code-server, File Browser, Glances, Caddy.
+  Docker + compose, gh, code-server, File Browser, Glances, Caddy.
 - Open ports: 22, 80, 443, 3000-3999, 5000-5999, 8000-8999. Docker-published ports bypass the firewall.
 - Passwordless `sudo`, member of `docker`. RAM is shared (6 GB): be kind.
 

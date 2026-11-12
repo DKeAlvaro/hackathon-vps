@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# After a push: if main moved, update the live checkout, then mirror to GitHub in the background.
+# Installed by server/bootstrap.sh into /srv/hack/project.git/hooks/. Runs as the pushing user.
+# Env overrides (used by tests): HACK_LIVE_DIR, HACK_MIRROR (0 = off), HACK_MIRROR_REMOTE, HACK_MIRROR_LOG.
+zero=0000000000000000000000000000000000000000
+BARE="$(pwd)"
+LIVE="${HACK_LIVE_DIR:-/srv/hack/project}"
+REMOTE="${HACK_MIRROR_REMOTE:-github}"
+LOG="${HACK_MIRROR_LOG:-/srv/hack/.mirror.log}"
+unset GIT_DIR GIT_WORK_TREE GIT_QUARANTINE_PATH GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+
+main_updated=0
+while read -r old new ref; do
+  if [ "$ref" = "refs/heads/main" ] && [ "$new" != "$zero" ]; then main_updated=1; fi
+done
+
+if [ "$main_updated" -eq 1 ] && [ -d "$LIVE/.git" ]; then
+  if git -C "$LIVE" fetch -q origin && git -C "$LIVE" reset -q --hard origin/main; then
+    echo "live checkout updated to $(git -C "$LIVE" rev-parse --short HEAD)"
+  else
+    echo "WARNING: live checkout update failed (tell Alvaro)" >&2
+  fi
+fi
+
+if [ "${HACK_MIRROR:-1}" != "0" ] && git --git-dir="$BARE" remote get-url "$REMOTE" >/dev/null 2>&1; then
+  (nohup git --git-dir="$BARE" push -q --prune "$REMOTE" 'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*' \
+    >>"$LOG" 2>&1 </dev/null &)
+fi
+exit 0

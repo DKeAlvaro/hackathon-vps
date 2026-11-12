@@ -140,9 +140,9 @@ else
 fi
 rm -f "$tmpf"
 
-mkdir -p /srv/hack /srv/hack/.tmux /srv/hack/inbox /srv/hack/wt
-chown root:team /srv/hack /srv/hack/.tmux /srv/hack/inbox /srv/hack/wt
-chmod 2775 /srv/hack /srv/hack/.tmux /srv/hack/inbox /srv/hack/wt
+mkdir -p /srv/hack /srv/hack/.tmux /srv/hack/inbox
+chown root:team /srv/hack /srv/hack/.tmux /srv/hack/inbox
+chmod 2775 /srv/hack /srv/hack/.tmux /srv/hack/inbox
 setfacl -R -m g:team:rwX /srv/hack
 setfacl -R -d -m g:team:rwX /srv/hack
 if [ ! -f /srv/hack/README.md ]; then
@@ -151,9 +151,11 @@ if [ ! -f /srv/hack/README.md ]; then
 
 This folder (/srv/hack, also ~/hack) is shared by the whole team.
 
-- project/   clone of the team repo (DKeAlvaro/hackathon). Push works from here (deploy key).
-- wt/        one git worktree per person and feature:
-             git -C ~/hack/project worktree add ~/hack/wt/<you>-<feature> -b <you>/<feature>
+- project/   live checkout of main (read-only by convention: reset to main on every push). Run the shared
+             demo from here. Do not edit it; code on your own computer and push to origin.
+- project.git/  central git repo (origin of everyone's local clone: hack:/srv/hack/project.git).
+             Pushes to main update project/ and are mirrored to GitHub DKeAlvaro/hackathon.
+- Nobody runs coding agents on this server (6 GB RAM): agents run on each person's own machine.
 - inbox/<you>/  files sent from your laptop with send.sh / send.ps1
 - kit-agentes/  skills and AGENTS.md template for coding agents
 - Everyone in group `team` can read and write everything here (setgid + default ACLs).
@@ -238,7 +240,7 @@ else
   warn "server/admin.pub missing or invalid: admin key not installed"
 fi
 
-say "Deploy key and project clone ($PROJECT_REPO)"
+say "Deploy key, central project repo and live checkout ($PROJECT_REPO)"
 DEPLOY_KEY=/etc/hack/deploy_key
 if [ ! -f "$DEPLOY_KEY" ]; then
   ssh-keygen -q -t ed25519 -N "" -C "hack-vps" -f "$DEPLOY_KEY"
@@ -253,25 +255,69 @@ if ! grep -q '^github.com ' /etc/ssh/ssh_known_hosts; then
     || warn "ssh-keyscan github.com failed; clone over ssh may ask to trust the host"
 fi
 GIT_SSH="ssh -i $DEPLOY_KEY -o IdentitiesOnly=yes"
+BARE=/srv/hack/project.git
+LIVE=/srv/hack/project
+MIRROR_LOG=/srv/hack/.mirror.log
 PROJECT_STATUS="missing"
-if [ ! -d /srv/hack/project/.git ]; then
+LIVE_STATUS="missing"
+if [ ! -f "$BARE/HEAD" ]; then
   # Run as alvaro: OpenSSH refuses a group-readable key only when the key is owned by the caller.
   if runuser -u alvaro -- env GIT_SSH_COMMAND="$GIT_SSH -o BatchMode=yes" GIT_TERMINAL_PROMPT=0 \
-       git clone "git@github.com:$PROJECT_REPO.git" /srv/hack/project; then
-    PROJECT_STATUS="cloned"
+       git clone --bare "git@github.com:$PROJECT_REPO.git" "$BARE"; then
+    PROJECT_STATUS="created from GitHub"
   else
     PROJECT_STATUS="clone failed"
-    warn "could not clone $PROJECT_REPO: add the deploy key (command in the summary) and re-run bootstrap"
+    warn "could not clone $PROJECT_REPO into $BARE: add the deploy key (command in the summary) and re-run bootstrap"
   fi
 else
   PROJECT_STATUS="present"
 fi
-if [ -d /srv/hack/project/.git ]; then
-  git -C /srv/hack/project config core.sshCommand "$GIT_SSH"
-  git -C /srv/hack/project config core.sharedRepository group
-  chgrp -R team /srv/hack/project
-  setfacl -R -m g:team:rwX /srv/hack/project
-  setfacl -R -d -m g:team:rwX /srv/hack/project
+if [ -f "$BARE/HEAD" ]; then
+  git -C "$BARE" symbolic-ref HEAD refs/heads/main
+  git -C "$BARE" config core.sharedRepository group
+  git -C "$BARE" remote remove origin 2>/dev/null || true
+  if git -C "$BARE" remote get-url github >/dev/null 2>&1; then
+    git -C "$BARE" remote set-url github "git@github.com:$PROJECT_REPO.git"
+  else
+    git -C "$BARE" remote add github "git@github.com:$PROJECT_REPO.git"
+  fi
+  git -C "$BARE" config core.sshCommand "$GIT_SSH"
+  # Hooks: guard main (no force-push, no delete), update the live checkout, mirror to GitHub.
+  install -d -m 755 "$BARE/hooks"
+  install -m 755 "$SERVER_DIR/git/pre-receive" "$BARE/hooks/pre-receive"
+  install -m 755 "$SERVER_DIR/git/post-receive" "$BARE/hooks/post-receive"
+  touch "$MIRROR_LOG"
+  # Live checkout of main: a normal clone of the bare repo.
+  if [ ! -d "$LIVE/.git" ]; then
+    if [ -e "$LIVE" ] && [ -n "$(ls -A "$LIVE" 2>/dev/null)" ]; then
+      warn "$LIVE exists and is not a git clone: move it away and re-run bootstrap"
+      LIVE_STATUS="blocked"
+    elif runuser -u alvaro -- git clone -q -b main "$BARE" "$LIVE"; then
+      LIVE_STATUS="cloned"
+    else
+      LIVE_STATUS="clone failed"
+      warn "could not clone $BARE into $LIVE"
+    fi
+  else
+    # Older installs cloned from GitHub: point origin at the central repo.
+    git -C "$LIVE" remote set-url origin "$BARE"
+    git -C "$LIVE" config --unset core.sshCommand 2>/dev/null || true
+    LIVE_STATUS="present"
+  fi
+  if [ -d "$LIVE/.git" ]; then
+    git -C "$LIVE" config core.sharedRepository group
+    git -C "$LIVE" checkout -q main 2>/dev/null || true
+  fi
+  for d in "$BARE" "$LIVE"; do
+    [ -e "$d" ] || continue
+    chgrp -R team "$d"
+    chmod -R g+rwX "$d"
+    find "$d" -type d -exec chmod g+s {} +
+    setfacl -R -m g:team:rwX "$d"
+    setfacl -R -d -m g:team:rwX "$d"
+  done
+  chgrp team "$MIRROR_LOG"
+  chmod 664 "$MIRROR_LOG"
 fi
 
 # gruia agent kit (skills for Claude Code/Codex + AGENTS.md template), copied into projects on demand.
@@ -597,7 +643,7 @@ cat > /etc/update-motd.d/99-hack <<'EOF'
 base="$(cat /etc/hack/domain 2>/dev/null)"
 echo
 echo "  Hackathon VPS"
-echo "  Shared folder : ~/hack  (/srv/hack)   project: ~/hack/project"
+echo "  Shared folder : ~/hack  (/srv/hack)   live main: ~/hack/project"
 echo "  Shared tmux   : run 'pair'  (or 'pair <name>')"
 if [ -n "$base" ]; then
   echo "  Web           : https://$base"
@@ -669,7 +715,13 @@ cat "$DEPLOY_KEY.pub"
 echo "Admin command (on a machine where gh is logged in as the repo owner; hack-vps.pub holds the line above):"
 echo "  gh repo deploy-key add hack-vps.pub --repo $PROJECT_REPO --allow-write --title hack-vps"
 echo "  e.g.: ssh root@${PUBLIC_IP:-<server ip>} cat $DEPLOY_KEY.pub > hack-vps.pub"
-echo "Project clone: $PROJECT_STATUS (/srv/hack/project)"
+echo "Central repo   : $PROJECT_STATUS ($BARE)"
+if [ -f "$BARE/HEAD" ]; then
+  echo "  branches      : $(git -C "$BARE" for-each-ref --format='%(refname:short)' refs/heads | tr '
+' ' ')"
+  echo "  mirror remote : $(git -C "$BARE" remote get-url github) (log: $MIRROR_LOG)"
+fi
+echo "Live checkout   : $LIVE_STATUS ($LIVE)$( [ -d "$LIVE/.git" ] && echo " at $(git -C "$LIVE" rev-parse --short HEAD 2>/dev/null) on $(git -C "$LIVE" rev-parse --abbrev-ref HEAD 2>/dev/null)" )"
 echo
 echo "Shared dir : /srv/hack (root:team 2775, default ACL g:team:rwX)"
 echo "Members    : $(getent group team | cut -d: -f4)"

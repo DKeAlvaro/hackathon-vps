@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Connect this computer to the shared hackathon VPS (macOS, Linux, Git Bash on Windows).
-# Usage: ./connect.sh -u NAME -c CODE [--check] [--print]
+# Usage: ./connect.sh -u NAME -c CODE [--check] [--print] [--project-dir PATH] [--no-project]
 set -euo pipefail
 
+ORIG_PWD="$(pwd)"
 cd "$(dirname "${BASH_SOURCE[0]}")"
 ROOT="$(pwd)"
 BEGIN_MARK='# >>> hackathon-vps >>>'
@@ -13,6 +14,8 @@ USER_ARG="${HACK_USER:-}"
 CODE_ARG="${HACK_CODE:-}"
 CHECK=0
 PRINT=0
+NO_PROJECT=0
+PROJECT_DIR_ARG=""
 
 usage() {
   cat <<'EOT'
@@ -21,6 +24,8 @@ Usage: ./connect.sh -u NAME -c CODE [options]
   -c, --code CODE   Your personal code (xxxx-xxxx-xxxx). Default: $HACK_CODE.
   --check           Only test whether `ssh hack` works now. Exit 0 if yes, 1 if not.
   --print           Only print the ssh config block and your public key.
+  --project-dir P   Where to clone the team project. Default: folder "hackathon" next to this repo.
+  --no-project      Do not clone/fetch the team project.
   -h, --help        This help.
 EOT
 }
@@ -33,6 +38,9 @@ while [ $# -gt 0 ]; do
     --code=*) CODE_ARG="${1#--code=}"; shift ;;
     --check) CHECK=1; shift ;;
     --print) PRINT=1; shift ;;
+    --no-project) NO_PROJECT=1; shift ;;
+    --project-dir) [ $# -ge 2 ] || { echo "missing value for $1" >&2; exit 2; }; PROJECT_DIR_ARG="$2"; shift 2 ;;
+    --project-dir=*) PROJECT_DIR_ARG="${1#--project-dir=}"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -198,6 +206,55 @@ if [ "$ok" -ne 1 ]; then
   exit 1
 fi
 
+# ---- 7. local project clone ---------------------------------------------------
+PROJECT_URL="${HACK_PROJECT_URL:-$HOST_ALIAS:/srv/hack/project.git}"
+if [ -n "$PROJECT_DIR_ARG" ]; then
+  case "$PROJECT_DIR_ARG" in
+    /*|[A-Za-z]:*) PROJECT_DIR="$PROJECT_DIR_ARG" ;;
+    *) PROJECT_DIR="$ORIG_PWD/$PROJECT_DIR_ARG" ;;
+  esac
+else
+  PROJECT_DIR="$(dirname "$ROOT")/hackathon"
+fi
+PROJECT_MSG="skipped (--no-project)"
+if [ "$NO_PROJECT" -ne 1 ]; then
+  step 7 "Team project in $PROJECT_DIR"
+  PROJECT_MSG="not set up"
+  if [ ! -e "$PROJECT_DIR" ] || { [ -d "$PROJECT_DIR" ] && [ -z "$(ls -A "$PROJECT_DIR" 2>/dev/null)" ]; }; then
+    if git clone -q "$PROJECT_URL" "$PROJECT_DIR"; then
+      echo "cloned $PROJECT_URL"
+      PROJECT_MSG="$PROJECT_DIR (cloned)"
+    else
+      echo "WARNING: could not clone $PROJECT_URL (the server's project repo may not exist yet: ask Alvaro, then re-run this script)." >&2
+    fi
+  elif [ -d "$PROJECT_DIR/.git" ] && [ "$(git -C "$PROJECT_DIR" remote get-url origin 2>/dev/null || true)" = "$PROJECT_URL" ]; then
+    if git -C "$PROJECT_DIR" fetch -q; then
+      echo "already cloned, fetched"
+      PROJECT_MSG="$PROJECT_DIR (up to date, fetched)"
+    else
+      echo "WARNING: git fetch failed in $PROJECT_DIR" >&2
+      PROJECT_MSG="$PROJECT_DIR (fetch failed)"
+    fi
+  else
+    echo "WARNING: $PROJECT_DIR exists but is not a clone of $PROJECT_URL; leaving it alone." >&2
+    echo "         Use --project-dir <other folder> or --no-project." >&2
+    PROJECT_MSG=""
+  fi
+  # Repo-local identity only when there is no global one.
+  if [ -d "$PROJECT_DIR/.git" ] && [ "$(git -C "$PROJECT_DIR" remote get-url origin 2>/dev/null || true)" = "$PROJECT_URL" ]; then
+    DISPLAY_NAME="$(awk -v u="$USERNAME" 'NF && $1 == u { $1=""; sub(/^ +/, ""); sub(/\r$/, ""); print; exit }' "$ROOT/server/team.txt")"
+    [ -n "$DISPLAY_NAME" ] || DISPLAY_NAME="$USERNAME"
+    if [ -z "$(git config --global user.name 2>/dev/null || true)" ]; then
+      git -C "$PROJECT_DIR" config user.name "$DISPLAY_NAME"
+      echo "git user.name set for this project: $DISPLAY_NAME"
+    fi
+    if [ -z "$(git config --global user.email 2>/dev/null || true)" ]; then
+      git -C "$PROJECT_DIR" config user.email "$USERNAME@hackathon.local"
+      echo "git user.email set for this project: $USERNAME@hackathon.local"
+    fi
+  fi
+fi
+
 cat <<EOF
 
 You are connected as $USERNAME.
@@ -209,8 +266,14 @@ Web (login: user = $USERNAME, password = your code)
   $(web_sub files)     upload / download / share files
   $(web_sub stats)     CPU, RAM, disk, processes
 
-Send files to the VPS:   ./send.sh <paths>   (Windows: .\\send.ps1 <paths>)  -> ~/hack/inbox/$USERNAME/
-The team project:        ~/hack/project on the VPS (repo $PROJECT_REPO)
-VS Code / Cursor:        Remote-SSH, connect to host "$HOST_ALIAS"
+Local project folder:    ${PROJECT_MSG:-not set up (see warning above)}
+
+How we work
+  1. Code with your own agent in that folder (nobody runs agents on the VPS: 6 GB RAM for 4 people).
+  2. git pull --rebase && git push   (origin = the VPS; a push to main updates ~/hack/project on the VPS
+     and mirrors to GitHub $PROJECT_REPO; use branches <you>/<feature> for work in progress)
+  3. Big files and data: ./send.sh <paths>   (Windows: .\send.ps1 <paths>)  -> ~/hack/inbox/$USERNAME/
+
+VS Code / Cursor on the VPS files: Remote-SSH, connect to host "$HOST_ALIAS"
 Shared terminal:         run 'pair' on the VPS
 EOF

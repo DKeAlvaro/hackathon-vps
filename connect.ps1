@@ -1,15 +1,18 @@
 # Connect this Windows computer to the shared hackathon VPS (PowerShell 5.1+, built-in OpenSSH client).
-# Usage: powershell -ExecutionPolicy Bypass -File .\connect.ps1 -User NAME -Code CODE [-Check] [-Print]
+# Usage: powershell -ExecutionPolicy Bypass -File .\connect.ps1 -User NAME -Code CODE [-Check] [-Print] [-ProjectDir PATH] [-NoProject]
 [CmdletBinding()]
 param(
     [Alias('u')][string]$User = $env:HACK_USER,
     [Alias('c')][string]$Code = $env:HACK_CODE,
     [switch]$Check,
-    [switch]$Print
+    [switch]$Print,
+    [string]$ProjectDir = '',
+    [switch]$NoProject
 )
 
 $ErrorActionPreference = 'Continue'
 $Root = $PSScriptRoot
+$OrigDir = (Get-Location).Path
 $CodeRe = '^[a-hj-km-np-z2-9]{4}-[a-hj-km-np-z2-9]{4}-[a-hj-km-np-z2-9]{4}$'
 $BeginMark = '# >>> hackathon-vps >>>'
 $EndMark = '# <<< hackathon-vps <<<'
@@ -216,6 +219,68 @@ if (-not $ok) {
     exit 1
 }
 
+# ---- 7. local project clone ----
+function Setup-Project([string]$Url, [string]$Dir, [string]$UserName, [string]$TeamFile) {
+    # Returns a one-line status for the summary ('' = not set up).
+    $isRepo = Test-Path (Join-Path $Dir '.git')
+    $isEmpty = (-not (Test-Path $Dir)) -or ((Test-Path $Dir -PathType Container) -and -not (Get-ChildItem -Force $Dir | Select-Object -First 1))
+    $msg = ''
+    $origin = ''
+    if ($isRepo) { $origin = (Invoke-Native 'git' ('-C ' + (Q $Dir) + ' remote get-url origin') -Capture).Out }
+    if ($isEmpty) {
+        $r = Invoke-Native 'git' ('clone -q ' + (Q $Url) + ' ' + (Q $Dir))
+        if ($r.ExitCode -eq 0) { Write-Host "cloned $Url"; $msg = "$Dir (cloned)" }
+        else { Write-Host "WARNING: could not clone $Url (the server's project repo may not exist yet: ask Alvaro, then re-run this script)." }
+    } elseif ($isRepo -and $origin -eq $Url) {
+        $r = Invoke-Native 'git' ('-C ' + (Q $Dir) + ' fetch -q')
+        if ($r.ExitCode -eq 0) { Write-Host 'already cloned, fetched'; $msg = "$Dir (up to date, fetched)" }
+        else { Write-Host "WARNING: git fetch failed in $Dir"; $msg = "$Dir (fetch failed)" }
+    } else {
+        Write-Host "WARNING: $Dir exists but is not a clone of $Url; leaving it alone."
+        Write-Host '         Use -ProjectDir <other folder> or -NoProject.'
+        return ''
+    }
+    if ((Test-Path (Join-Path $Dir '.git')) -and ((Invoke-Native 'git' ('-C ' + (Q $Dir) + ' remote get-url origin') -Capture).Out -eq $Url)) {
+        $display = ''
+        foreach ($line in [System.IO.File]::ReadAllLines($TeamFile)) {
+            $t = $line.Trim()
+            if ($t -and -not $t.StartsWith('#')) {
+                $parts = $t -split '\s+', 2
+                if ($parts[0] -eq $UserName -and $parts.Count -gt 1) { $display = $parts[1]; break }
+            }
+        }
+        if (-not $display) { $display = $UserName }
+        if (-not (Invoke-Native 'git' 'config --global user.name' -Capture).Out) {
+            Invoke-Native 'git' ('-C ' + (Q $Dir) + ' config user.name ' + (Q $display)) | Out-Null
+            Write-Host "git user.name set for this project: $display"
+        }
+        if (-not (Invoke-Native 'git' 'config --global user.email' -Capture).Out) {
+            Invoke-Native 'git' ('-C ' + (Q $Dir) + ' config user.email ' + (Q "$UserName@hackathon.local")) | Out-Null
+            Write-Host "git user.email set for this project: $UserName@hackathon.local"
+        }
+    }
+    return $msg
+}
+
+$ProjectMsg = 'skipped (-NoProject)'
+if (-not $NoProject) {
+    $ProjectUrl = $env:HACK_PROJECT_URL
+    if (-not $ProjectUrl) { $ProjectUrl = "${HostAlias}:/srv/hack/project.git" }
+    if ($ProjectDir) {
+        $ProjectPath = [System.IO.Path]::GetFullPath((Join-Path $OrigDir $ProjectDir))
+    } else {
+        $ProjectPath = Join-Path (Split-Path -Parent $Root) 'hackathon'
+    }
+    Step 7 "Team project in $ProjectPath"
+    if (-not (Has-Command 'git')) {
+        Write-Host 'WARNING: git is not installed, so the project was not cloned. Install Git for Windows and re-run.'
+        $ProjectMsg = ''
+    } else {
+        $ProjectMsg = Setup-Project $ProjectUrl $ProjectPath $User $teamPath
+    }
+}
+if (-not $ProjectMsg) { $ProjectMsg = 'not set up (see warning above)' }
+
 Write-Host ''
 Write-Host "You are connected as $User."
 Write-Host "  ssh $HostAlias                  open a shell on the VPS"
@@ -226,8 +291,14 @@ Write-Host "  $(Web-Sub 'code')      VS Code in the browser (live files, editor,
 Write-Host "  $(Web-Sub 'files')     upload / download / share files"
 Write-Host "  $(Web-Sub 'stats')     CPU, RAM, disk, processes"
 Write-Host ''
-Write-Host "Send files to the VPS:   .\send.ps1 <paths>   (macOS/Linux/Git Bash: ./send.sh <paths>)  -> ~/hack/inbox/$User/"
-Write-Host "The team project:        ~/hack/project on the VPS (repo $ProjectRepo)"
-Write-Host "VS Code / Cursor:        Remote-SSH, connect to host `"$HostAlias`""
+Write-Host "Local project folder:    $ProjectMsg"
+Write-Host ''
+Write-Host 'How we work'
+Write-Host '  1. Code with your own agent in that folder (nobody runs agents on the VPS: 6 GB RAM for 4 people).'
+Write-Host "  2. git pull --rebase; git push   (origin = the VPS; a push to main updates ~/hack/project on the VPS"
+Write-Host "     and mirrors to GitHub $ProjectRepo; use branches <you>/<feature> for work in progress)"
+Write-Host "  3. Big files and data: .\send.ps1 <paths>   (macOS/Linux/Git Bash: ./send.sh <paths>)  -> ~/hack/inbox/$User/"
+Write-Host ''
+Write-Host "VS Code / Cursor on the VPS files: Remote-SSH, connect to host `"$HostAlias`""
 Write-Host "Shared terminal:         run 'pair' on the VPS"
 exit 0
