@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# One-time setup of the shared hackathon VPS. Run as root on a fresh Ubuntu 24.04:
-#   curl -fsSL https://raw.githubusercontent.com/DKeAlvaro/hackathon-vps/main/server/bootstrap.sh | sudo bash
-# Idempotent: safe to run again.
+# Set up the shared hackathon VPS. Run as root on a fresh Ubuntu 24.04:
+#   bash /opt/hackathon-vps/server/bootstrap.sh
+# or, the first time:
+#   curl -fsSL https://raw.githubusercontent.com/DKeAlvaro/hackathon-vps/main/server/bootstrap.sh | bash
+# Idempotent: safe to run again (also how you apply updates, new people, rotated codes).
+# Env: HACK_DOMAIN overrides the web hostname (default <ip-with-dashes>.sslip.io).
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
 REPO_URL="https://github.com/DKeAlvaro/hackathon-vps.git"
 REPO_DIR=/opt/hackathon-vps
+PROJECT_REPO="DKeAlvaro/hackathon"
+NAME_RE='^[a-z][a-z0-9-]{0,30}$'
 WARNINGS=()
 
 say()  { printf '\n==> %s\n' "$*"; }
@@ -20,11 +25,43 @@ fi
 
 APT_OPTS=(-y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
 
+# ---- run from the clone in /opt/hackathon-vps ---------------------------------
+here=""
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+if [ "$here" != "$REPO_DIR/server" ]; then
+  say "Using the clone in $REPO_DIR"
+  command -v git >/dev/null || { apt-get update -y; apt-get install "${APT_OPTS[@]}" git ca-certificates; }
+  if [ -d "$REPO_DIR/.git" ]; then
+    git -C "$REPO_DIR" pull -q --ff-only || echo "could not update $REPO_DIR, using it as is" >&2
+  else
+    git clone "$REPO_URL" "$REPO_DIR"
+  fi
+  exec bash "$REPO_DIR/server/bootstrap.sh" "$@"
+fi
+SERVER_DIR="$REPO_DIR/server"
+TEAM_FILE="$SERVER_DIR/team.txt"
+chmod +x "$SERVER_DIR"/*.sh "$SERVER_DIR"/join/join.py 2>/dev/null || true
+
+# team.txt -> TEAM_USERS (names) and TEAM_DISPLAY[name]
+TEAM_USERS=()
+declare -A TEAM_DISPLAY=()
+while read -r u display || [ -n "${u:-}" ]; do
+  case "${u:-}" in ""|"#"*) continue ;; esac
+  if ! [[ "$u" =~ $NAME_RE ]] || [ "$u" = root ]; then
+    warn "team.txt: ignoring invalid name '$u'"; continue
+  fi
+  TEAM_USERS+=("$u")
+  TEAM_DISPLAY[$u]="${display:-$u}"
+done < <(tr -d '\r' < "$TEAM_FILE")
+[ "${#TEAM_USERS[@]}" -gt 0 ] || { echo "server/team.txt has no users" >&2; exit 1; }
+
 say "apt update/upgrade and base packages"
 apt-get update -y
 apt-get upgrade "${APT_OPTS[@]}"
 apt-get install "${APT_OPTS[@]}" git curl wget tmux htop btop jq unzip zip build-essential \
-  python3 python3-pip python3-venv pipx ripgrep fd-find ufw fail2ban acl ca-certificates gnupg
+  python3 python3-pip python3-venv pipx ripgrep fd-find ufw fail2ban acl ca-certificates gnupg openssh-client
 # Ubuntu names the fd binary fdfind; add the usual name.
 if command -v fdfind >/dev/null && ! command -v fd >/dev/null; then
   ln -s "$(command -v fdfind)" /usr/local/bin/fd
@@ -103,9 +140,9 @@ else
 fi
 rm -f "$tmpf"
 
-mkdir -p /srv/hack /srv/hack/.tmux
-chown root:team /srv/hack /srv/hack/.tmux
-chmod 2775 /srv/hack /srv/hack/.tmux
+mkdir -p /srv/hack /srv/hack/.tmux /srv/hack/inbox /srv/hack/wt
+chown root:team /srv/hack /srv/hack/.tmux /srv/hack/inbox /srv/hack/wt
+chmod 2775 /srv/hack /srv/hack/.tmux /srv/hack/inbox /srv/hack/wt
 setfacl -R -m g:team:rwX /srv/hack
 setfacl -R -d -m g:team:rwX /srv/hack
 if [ ! -f /srv/hack/README.md ]; then
@@ -114,30 +151,140 @@ if [ ! -f /srv/hack/README.md ]; then
 
 This folder (/srv/hack, also ~/hack) is shared by the whole team.
 
-- Put every project in its own folder here: `cd ~/hack && git clone ...` or `mkdir my-project`.
+- project/   clone of the team repo (DKeAlvaro/hackathon). Push works from here (deploy key).
+- wt/        one git worktree per person and feature:
+             git -C ~/hack/project worktree add ~/hack/wt/<you>-<feature> -b <you>/<feature>
+- inbox/<you>/  files sent from your laptop with send.sh / send.ps1
+- kit-agentes/  skills and AGENTS.md template for coding agents
 - Everyone in group `team` can read and write everything here (setgid + default ACLs).
-- Shared terminal: run `pair` (or `pair <name>`) to attach to a tmux session everyone can join.
-  Detach with Ctrl-b d. Long jobs belong in tmux so they survive disconnects.
+- Shared terminal: run `pair` (or `pair <name>`). Detach with Ctrl-b d.
 - Open ports for your apps: 3000-3999, 5000-5999, 8000-8999 (plus 80 and 443).
   Bind to 0.0.0.0, then open http://<server-ip>:<port>.
-- Docker-published ports (-p 8080:80) bypass ufw: they are reachable from the internet
-  regardless of the firewall. Bind to 127.0.0.1 (-p 127.0.0.1:8080:80) if it should stay private.
-- Do not commit secrets (API keys, .env files) to public repos.
+- Docker-published ports (-p 8080:80) bypass ufw. Use -p 127.0.0.1:8080:80 to keep one private.
+- Never commit secrets (API keys, .env files).
 - Check `free -h` before heavy builds: RAM is shared.
 EOF
 fi
 chown root:team /srv/hack/README.md
 chmod 664 /srv/hack/README.md
 
+say "Team users, personal codes, admin key"
+mkdir -p /etc/hack
+chown root:team /etc/hack
+chmod 750 /etc/hack
+
+for u in "${TEAM_USERS[@]}"; do
+  if id "$u" >/dev/null 2>&1; then
+    uid="$(id -u "$u")"
+    if [ "$uid" -lt 1000 ] || [ "$uid" -eq 0 ]; then
+      warn "$u is a system account (uid $uid): not touching it"; continue
+    fi
+    usermod -aG team,sudo,docker "$u"
+  else
+    useradd -m -s /bin/bash -G team,sudo,docker "$u"
+  fi
+  home="$(getent passwd "$u" | cut -d: -f6)"
+  ln -sfn /srv/hack "$home/hack"
+  chown -h "$u:$u" "$home/hack"
+  gc="$home/.gitconfig"
+  if [ -z "$(git config --file "$gc" --get user.name 2>/dev/null || true)" ]; then
+    git config --file "$gc" user.name "${TEAM_DISPLAY[$u]}"
+    git config --file "$gc" user.email "$u@hackathon.local"
+  fi
+  [ -n "$(git config --file "$gc" --get init.defaultBranch 2>/dev/null || true)" ] || git config --file "$gc" init.defaultBranch main
+  chown "$u:$u" "$gc"
+  install -d -o "$u" -g team -m 2775 "/srv/hack/inbox/$u"
+  install -d -o "$u" -g "$u" -m 700 "$home/.ssh"
+  touch "$home/.ssh/authorized_keys"
+  chown "$u:$u" "$home/.ssh/authorized_keys"
+  chmod 600 "$home/.ssh/authorized_keys"
+done
+
+# Codes: generated once; people added to team.txt later get a line appended.
+gen_code() {
+  python3 -c 'import secrets
+a = "abcdefghjkmnpqrstuvwxyz23456789"
+c = "".join(secrets.choice(a) for _ in range(12))
+print("-".join(c[i:i + 4] for i in (0, 4, 8)))'
+}
+CODES=/etc/hack/codes
+[ -f "$CODES" ] || install -m 600 -o root -g root /dev/null "$CODES"
+for u in "${TEAM_USERS[@]}"; do
+  if ! awk -v u="$u" '$1 == u { f = 1 } END { exit !f }' "$CODES"; then
+    printf '%s %s\n' "$u" "$(gen_code)" >> "$CODES"
+  fi
+done
+chown root:root "$CODES"
+chmod 600 "$CODES"
+
+# Admin key (Alvaro): root and alvaro.
+ADMIN_PUB="$SERVER_DIR/admin.pub"
+ADMIN_KEY_OK=0
+if [ -s "$ADMIN_PUB" ] && ssh-keygen -l -f "$ADMIN_PUB" >/dev/null 2>&1; then
+  ADMIN_KEY_OK=1
+  admin_line="$(grep -E '^(ssh-|ecdsa-|sk-)' "$ADMIN_PUB" | head -n1 | tr -d '\r')"
+  admin_blob="$(printf '%s' "$admin_line" | awk '{print $2}')"
+  install -d -m 700 /root/.ssh
+  touch /root/.ssh/authorized_keys
+  chmod 600 /root/.ssh/authorized_keys
+  grep -qF "$admin_blob" /root/.ssh/authorized_keys || printf '%s\n' "$admin_line" >> /root/.ssh/authorized_keys
+  if id alvaro >/dev/null 2>&1; then
+    ak="$(getent passwd alvaro | cut -d: -f6)/.ssh/authorized_keys"
+    grep -qF "$admin_blob" "$ak" || printf '%s\n' "$admin_line" >> "$ak"
+    chown alvaro:alvaro "$ak"
+    chmod 600 "$ak"
+  fi
+else
+  warn "server/admin.pub missing or invalid: admin key not installed"
+fi
+
+say "Deploy key and project clone ($PROJECT_REPO)"
+DEPLOY_KEY=/etc/hack/deploy_key
+if [ ! -f "$DEPLOY_KEY" ]; then
+  ssh-keygen -q -t ed25519 -N "" -C "hack-vps" -f "$DEPLOY_KEY"
+fi
+chown root:team "$DEPLOY_KEY"
+chmod 640 "$DEPLOY_KEY"
+chown root:root "$DEPLOY_KEY.pub"
+chmod 644 "$DEPLOY_KEY.pub"
+touch /etc/ssh/ssh_known_hosts
+if ! grep -q '^github.com ' /etc/ssh/ssh_known_hosts; then
+  ssh-keyscan -T 10 github.com 2>/dev/null >> /etc/ssh/ssh_known_hosts \
+    || warn "ssh-keyscan github.com failed; clone over ssh may ask to trust the host"
+fi
+GIT_SSH="ssh -i $DEPLOY_KEY -o IdentitiesOnly=yes"
+PROJECT_STATUS="missing"
+if [ ! -d /srv/hack/project/.git ]; then
+  # Run as alvaro: OpenSSH refuses a group-readable key only when the key is owned by the caller.
+  if runuser -u alvaro -- env GIT_SSH_COMMAND="$GIT_SSH -o BatchMode=yes" GIT_TERMINAL_PROMPT=0 \
+       git clone "git@github.com:$PROJECT_REPO.git" /srv/hack/project; then
+    PROJECT_STATUS="cloned"
+  else
+    PROJECT_STATUS="clone failed"
+    warn "could not clone $PROJECT_REPO: add the deploy key (command in the summary) and re-run bootstrap"
+  fi
+else
+  PROJECT_STATUS="present"
+fi
+if [ -d /srv/hack/project/.git ]; then
+  git -C /srv/hack/project config core.sshCommand "$GIT_SSH"
+  git -C /srv/hack/project config core.sharedRepository group
+  chgrp -R team /srv/hack/project
+  setfacl -R -m g:team:rwX /srv/hack/project
+  setfacl -R -d -m g:team:rwX /srv/hack/project
+fi
+
 # gruia agent kit (skills for Claude Code/Codex + AGENTS.md template), copied into projects on demand.
 if [ ! -d /srv/hack/kit-agentes/.git ]; then
   git clone -q --depth 1 https://github.com/gruia-app/skills.git /srv/hack/kit-agentes \
-    || echo "WARNING: could not clone gruia-app/skills" >&2
+    || warn "could not clone gruia-app/skills"
 fi
 if [ -d /srv/hack/kit-agentes ]; then
   chgrp -R team /srv/hack/kit-agentes
   setfacl -R -m g:team:rwX /srv/hack/kit-agentes
 fi
+setfacl -R -m g:team:rwX /srv/hack
+setfacl -R -d -m g:team:rwX /srv/hack
 
 say "pair helper, umask, git safe.directory"
 cat > /usr/local/bin/pair <<'EOF'
@@ -176,33 +323,291 @@ EOF
 chmod 644 /etc/profile.d/hack.sh
 git config --system safe.directory '*'
 
+# ---- web command center --------------------------------------------------------
+say "Public hostname"
+BASE="${HACK_DOMAIN:-}"
+PUBLIC_IP=""
+if [ -z "$BASE" ]; then
+  PUBLIC_IP="$(curl -4 -s --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+  if [[ "$PUBLIC_IP" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
+    BASE="${PUBLIC_IP//./-}.sslip.io"
+  else
+    PUBLIC_IP=""
+    [ -s /etc/hack/domain ] && BASE="$(cat /etc/hack/domain)"
+  fi
+fi
+if [ -n "$BASE" ] && ! [[ "$BASE" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]; then
+  warn "invalid domain '$BASE': web tools skipped"
+  BASE=""
+fi
+if [ -n "$BASE" ]; then
+  echo "$BASE" > /etc/hack/domain
+  echo "BASE = $BASE"
+else
+  warn "could not detect the public IPv4 (set HACK_DOMAIN=<name> and re-run): web tools skipped"
+fi
+
+say "hackweb service user"
+if ! id hackweb >/dev/null 2>&1; then
+  useradd --system --create-home --home-dir /var/lib/hackweb --shell /bin/bash -g team hackweb
+fi
+usermod -aG team hackweb
+mkdir -p /var/lib/hackweb
+chown hackweb:team /var/lib/hackweb
+chmod 750 /var/lib/hackweb
+if [ -z "$(git config --file /var/lib/hackweb/.gitconfig --get user.name 2>/dev/null || true)" ]; then
+  git config --file /var/lib/hackweb/.gitconfig user.name "Hackathon Web"
+  git config --file /var/lib/hackweb/.gitconfig user.email "web@hackathon.local"
+  git config --file /var/lib/hackweb/.gitconfig init.defaultBranch main
+  chown hackweb:team /var/lib/hackweb/.gitconfig
+fi
+
+say "code-server (https://code.BASE)"
+if ! command -v code-server >/dev/null; then
+  curl -fsSL https://code-server.dev/install.sh | sh \
+    || warn "code-server install failed; retry: curl -fsSL https://code-server.dev/install.sh | sh"
+fi
+CS_USER_DIR=/var/lib/hackweb/code-server/data
+install -d -o hackweb -g team -m 750 /var/lib/hackweb/code-server /var/lib/hackweb/code-server/data \
+  /var/lib/hackweb/code-server/extensions "$CS_USER_DIR/User"
+if [ ! -f "$CS_USER_DIR/User/settings.json" ]; then
+  cat > "$CS_USER_DIR/User/settings.json" <<'EOF'
+{
+  "workbench.startupEditor": "none",
+  "workbench.colorTheme": "Default Dark Modern",
+  "security.workspace.trust.enabled": false,
+  "telemetry.telemetryLevel": "off",
+  "files.exclude": {
+    "**/node_modules": true,
+    "**/.venv": true,
+    "**/__pycache__": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/.next": true
+  },
+  "files.watcherExclude": {
+    "**/node_modules/**": true,
+    "**/.venv/**": true,
+    "**/__pycache__/**": true,
+    "**/dist/**": true,
+    "**/build/**": true,
+    "**/.next/**": true,
+    "**/.git/objects/**": true
+  }
+}
+EOF
+  chown hackweb:team "$CS_USER_DIR/User/settings.json"
+fi
+cat > /etc/systemd/system/hack-code.service <<'EOF'
+[Unit]
+Description=code-server (shared VS Code in the browser)
+After=network.target
+
+[Service]
+User=hackweb
+Group=team
+UMask=0002
+Environment=HOME=/var/lib/hackweb
+WorkingDirectory=/srv/hack
+ExecStart=/usr/bin/code-server --bind-addr 127.0.0.1:8790 --auth none --disable-telemetry --disable-update-check --user-data-dir /var/lib/hackweb/code-server/data --extensions-dir /var/lib/hackweb/code-server/extensions /srv/hack
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+say "File Browser (https://files.BASE)"
+FB=/usr/local/bin/filebrowser
+if [ ! -x "$FB" ]; then
+  fbtmp="$(mktemp -d)"
+  if curl -fsSL https://github.com/filebrowser/filebrowser/releases/latest/download/linux-amd64-filebrowser.tar.gz -o "$fbtmp/fb.tgz" \
+     && tar -xzf "$fbtmp/fb.tgz" -C "$fbtmp" filebrowser; then
+    install -m 755 "$fbtmp/filebrowser" "$FB"
+  else
+    warn "filebrowser download failed; re-run bootstrap later"
+  fi
+  rm -rf "$fbtmp"
+fi
+FB_DB=/var/lib/filebrowser/filebrowser.db
+install -d -o hackweb -g team -m 750 /var/lib/filebrowser
+if [ -x "$FB" ]; then
+  systemctl stop hack-files 2>/dev/null || true
+  fb() { runuser -u hackweb -- "$FB" -d "$FB_DB" "$@"; }
+  [ -f "$FB_DB" ] || fb config init >/dev/null
+  fb config set -a 127.0.0.1 -p 8791 -r /srv/hack -b "" --auth.method=proxy --auth.header=X-Remote-User >/dev/null \
+    || warn "filebrowser config set failed"
+  existing_fb="$(fb users ls 2>/dev/null || true)"
+  for u in "${TEAM_USERS[@]}"; do
+    if ! printf '%s\n' "$existing_fb" | awk '{print $2}' | grep -qx "$u"; then
+      pw="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+      adm=""
+      [ "$u" = alvaro ] && adm="--perm.admin"
+      # shellcheck disable=SC2086
+      fb users add "$u" "$pw" $adm --perm.create --perm.rename --perm.modify --perm.delete --perm.share --perm.download >/dev/null \
+        || warn "filebrowser: could not add user $u"
+    fi
+  done
+fi
+cat > /etc/systemd/system/hack-files.service <<'EOF'
+[Unit]
+Description=File Browser (shared upload/download)
+After=network.target
+
+[Service]
+User=hackweb
+Group=team
+UMask=0002
+ExecStart=/usr/local/bin/filebrowser -d /var/lib/filebrowser/filebrowser.db
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+say "Glances (https://stats.BASE)"
+GLANCES=""
+if ! command -v glances >/dev/null; then
+  if command -v uv >/dev/null; then
+    mkdir -p /opt/uv-tools
+    export UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin
+    uv tool install 'glances[web,containers]' >/dev/null 2>&1 \
+      || uv tool install 'glances[web]' >/dev/null 2>&1 || true
+    unset UV_TOOL_DIR UV_TOOL_BIN_DIR
+  fi
+  if ! command -v glances >/dev/null; then
+    apt-get install "${APT_OPTS[@]}" glances python3-bottle python3-jinja2 \
+      || warn "glances install failed (uv and apt)"
+  fi
+fi
+GLANCES="$(command -v glances || true)"
+cat > /etc/systemd/system/hack-stats.service <<EOF
+[Unit]
+Description=Glances web UI (machine stats)
+After=network.target docker.service
+
+[Service]
+ExecStart=${GLANCES:-/usr/local/bin/glances} -w --bind 127.0.0.1 --port 8793
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+say "Join service (127.0.0.1:8792)"
+cat > /etc/systemd/system/hack-join.service <<EOF
+[Unit]
+Description=Hackathon join endpoint (installs SSH keys for team members)
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 $SERVER_DIR/join/join.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+for s in hack-code hack-files hack-stats hack-join; do
+  systemctl enable "$s" >/dev/null 2>&1 || true
+  systemctl restart "$s" || warn "service $s failed to start (journalctl -u $s)"
+done
+rm -f /etc/cron.d/hack-sync   # leftover from the old key-sync model
+
+say "Caddy (HTTPS reverse proxy)"
+if ! command -v caddy >/dev/null; then
+  install -m 0755 -d /usr/share/keyrings
+  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' > /etc/apt/sources.list.d/caddy-stable.list
+  chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list
+  apt-get update -y
+  apt-get install "${APT_OPTS[@]}" caddy || warn "caddy install failed"
+fi
+
+CADDY_STATUS="skipped"
+if [ -n "$BASE" ] && command -v caddy >/dev/null; then
+  install -d -m 755 /var/www/hack
+  sed "s/__BASE__/$BASE/g" "$SERVER_DIR/web/index.html" > /var/www/hack/index.html
+  chmod 644 /var/www/hack/index.html
+
+  render_caddyfile() {
+    printf '# Generated by bootstrap.sh, do not edit by hand.\n'
+    printf '(auth) {\n\tbasic_auth {\n'
+    while read -r u code || [ -n "${u:-}" ]; do
+      [ -n "${u:-}" ] && [ -n "${code:-}" ] || continue
+      printf '%s\n' "${TEAM_USERS[@]}" | grep -qx -- "$u" || continue   # only current team members
+      printf '\t\t%s %s\n' "$u" "$(caddy hash-password --plaintext "$code" </dev/null)"
+    done < "$CODES"
+    printf '\t}\n}\n\n'
+    printf '(proxy) {\n\treverse_proxy 127.0.0.1:{args[0]} {\n\t\theader_up X-Remote-User {http.auth.user.id}\n\t}\n}\n\n'
+    cat <<EOF
+$BASE {
+	@join path /join /join/*
+	handle @join {
+		reverse_proxy 127.0.0.1:8792
+	}
+	handle {
+		import auth
+		root * /var/www/hack
+		file_server
+	}
+}
+
+code.$BASE {
+	import auth
+	import proxy 8790
+}
+
+files.$BASE {
+	import auth
+	import proxy 8791
+}
+
+stats.$BASE {
+	import auth
+	import proxy 8793
+}
+EOF
+  }
+
+  cf_tmp="$(mktemp)"
+  render_caddyfile > "$cf_tmp"
+  if caddy validate --config "$cf_tmp" --adapter caddyfile >/dev/null 2>&1; then
+    install -m 644 -o root -g root "$cf_tmp" /etc/caddy/Caddyfile
+    systemctl enable caddy >/dev/null 2>&1 || true
+    systemctl reload caddy 2>/dev/null || systemctl restart caddy || warn "caddy failed to start (journalctl -u caddy)"
+    CADDY_STATUS="ok"
+  else
+    warn "generated Caddyfile did not validate; /etc/caddy/Caddyfile left unchanged"
+    CADDY_STATUS="invalid config"
+  fi
+  rm -f "$cf_tmp"
+fi
+
 say "MOTD"
 cat > /etc/update-motd.d/99-hack <<'EOF'
 #!/bin/sh
-cache=/var/cache/hack-public-ip
-if [ ! -s "$cache" ] || [ -n "$(find "$cache" -mmin +60 2>/dev/null)" ]; then
-  ip="$(curl -s --max-time 2 https://api.ipify.org 2>/dev/null)"
-  [ -n "$ip" ] && echo "$ip" > "$cache"
-fi
-ip="$(cat "$cache" 2>/dev/null)"
+base="$(cat /etc/hack/domain 2>/dev/null)"
 echo
-echo "  Hackathon VPS${ip:+ - public IP $ip}"
-echo "  Shared folder : ~/hack  (/srv/hack)"
+echo "  Hackathon VPS"
+echo "  Shared folder : ~/hack  (/srv/hack)   project: ~/hack/project"
 echo "  Shared tmux   : run 'pair'  (or 'pair <name>')"
+if [ -n "$base" ]; then
+  echo "  Web           : https://$base"
+  echo "                  https://code.$base   https://files.$base   https://stats.$base"
+fi
 echo "  Online now    : $(who | awk '{print $1}' | sort -u | tr '\n' ' ')"
 echo "  Open ports    : 3000-3999, 5000-5999, 8000-8999, 80, 443"
 echo
 EOF
 chmod 755 /etc/update-motd.d/99-hack
-
-say "Repo clone, cron sync, first sync"
-if [ ! -d "$REPO_DIR/.git" ]; then
-  git clone "$REPO_URL" "$REPO_DIR"
-fi
-chmod +x "$REPO_DIR"/server/*.sh
-echo '* * * * * root /opt/hackathon-vps/server/cron-sync.sh >>/var/log/hack-sync.log 2>&1' > /etc/cron.d/hack-sync
-chmod 644 /etc/cron.d/hack-sync
-"$REPO_DIR/server/sync-members.sh"
 
 say "fail2ban"
 mkdir -p /etc/fail2ban/jail.d
@@ -222,11 +627,9 @@ ufw allow 8000:8999/tcp
 ufw --force enable
 
 say "SSH hardening"
-# Never disable passwords unless at least one key login exists (avoids locking everyone out).
+# Never disable passwords unless a key login for root exists (the admin key was installed above).
 have_key=0
-for ak in /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys; do
-  if [ -s "$ak" ] && grep -qE '^(ssh-|ecdsa-|sk-)' "$ak"; then have_key=1; fi
-done
+if [ -s /root/.ssh/authorized_keys ] && grep -qE '^(ssh-|ecdsa-|sk-)' /root/.ssh/authorized_keys; then have_key=1; fi
 if [ "$have_key" -eq 1 ]; then
   cat > /etc/ssh/sshd_config.d/10-hack.conf <<'EOF'
 PasswordAuthentication no
@@ -242,15 +645,42 @@ EOF
     warn "sshd config test failed; hardening drop-in removed"
   fi
 else
-  warn "no authorized_keys found anywhere; SSH hardening skipped (would lock you out). Add a key and re-run."
+  warn "no key in /root/.ssh/authorized_keys; SSH hardening skipped (would lock you out). Add a key and re-run."
 fi
 
+# ---- summary --------------------------------------------------------------------
 say "Summary"
+if [ -n "$BASE" ]; then
+  echo "Web (first HTTPS certificate can take ~30 s; login = user name + personal code):"
+  echo "  https://$BASE"
+  echo "  https://code.$BASE    VS Code in the browser (live files, editor, terminal)"
+  echo "  https://files.$BASE   File Browser"
+  echo "  https://stats.$BASE   Glances"
+  echo "Fill in hack.conf in the repo, commit and push:"
+  echo "  HOST_IP=${PUBLIC_IP:-<server ip>}"
+  echo "  WEB_URL=https://$BASE"
+fi
+echo
+echo "Personal codes (/etc/hack/codes), send each person their own line:"
+awk '{ printf "  %-12s %s\n", $1, $2 }' "$CODES"
+echo
+echo "Deploy key for $PROJECT_REPO ($DEPLOY_KEY): public key"
+cat "$DEPLOY_KEY.pub"
+echo "Admin command (on a machine where gh is logged in as the repo owner; hack-vps.pub holds the line above):"
+echo "  gh repo deploy-key add hack-vps.pub --repo $PROJECT_REPO --allow-write --title hack-vps"
+echo "  e.g.: ssh root@${PUBLIC_IP:-<server ip>} cat $DEPLOY_KEY.pub > hack-vps.pub"
+echo "Project clone: $PROJECT_STATUS (/srv/hack/project)"
+echo
 echo "Shared dir : /srv/hack (root:team 2775, default ACL g:team:rwX)"
 echo "Members    : $(getent group team | cut -d: -f4)"
-echo "Sync log   : /var/log/hack-sync.log (cron every minute)"
 echo "Node       : $(node --version), Docker: $(docker --version 2>/dev/null || echo missing)"
 echo "ufw        : $(ufw status | head -1)"
+echo "Services   :"
+for s in hack-code hack-files hack-stats hack-join caddy fail2ban; do
+  printf '  %-12s %s\n' "$s" "$(systemctl is-active "$s" 2>/dev/null || true)"
+done
+echo "Caddy config: $CADDY_STATUS"
+[ "$ADMIN_KEY_OK" -eq 1 ] || echo "Admin key  : NOT installed"
 if [ "${#WARNINGS[@]}" -gt 0 ]; then
   echo "Warnings:"
   printf '  - %s\n' "${WARNINGS[@]}"

@@ -1,20 +1,20 @@
 # Connect this Windows computer to the shared hackathon VPS (PowerShell 5.1+, built-in OpenSSH client).
-# Usage: powershell -ExecutionPolicy Bypass -File .\connect.ps1 [-User NAME] [-NoPr] [-Wait MINUTES] [-Check] [-Print]
+# Usage: powershell -ExecutionPolicy Bypass -File .\connect.ps1 -User NAME -Code CODE [-Check] [-Print]
 [CmdletBinding()]
 param(
     [Alias('u')][string]$User = $env:HACK_USER,
-    [Alias('no-pr')][switch]$NoPr,
-    [int]$Wait = 0,
+    [Alias('c')][string]$Code = $env:HACK_CODE,
     [switch]$Check,
     [switch]$Print
 )
 
 $ErrorActionPreference = 'Continue'
 $Root = $PSScriptRoot
-$NameRe = '^[a-z][a-z0-9-]{0,30}$'
+$CodeRe = '^[a-hj-km-np-z2-9]{4}-[a-hj-km-np-z2-9]{4}-[a-hj-km-np-z2-9]{4}$'
 $BeginMark = '# >>> hackathon-vps >>>'
 $EndMark = '# <<< hackathon-vps <<<'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
 function Step($n, $text) { Write-Host ""; Write-Host "[$n] $text" }
 
@@ -41,21 +41,23 @@ function Has-Command($name) { [bool](Get-Command $name -ErrorAction SilentlyCont
 # ---- 1. read hack.conf ----
 Step 1 'Reading hack.conf'
 $confPath = Join-Path $Root 'hack.conf'
-if (-not (Test-Path $confPath)) { Write-Error "hack.conf not found in $Root"; exit 1 }
+if (-not (Test-Path $confPath)) { Write-Host "hack.conf not found in $Root"; exit 1 }
 $conf = @{}
 foreach ($line in [System.IO.File]::ReadAllLines($confPath)) {
     if ($line -match '^\s*([A-Z_]+)=(.*)$') { $conf[$Matches[1]] = $Matches[2].Trim() }
 }
-foreach ($k in 'HOST_ALIAS', 'HOST_IP', 'SSH_PORT', 'REPO') {
-    if (-not $conf[$k]) { Write-Error "hack.conf is incomplete (missing $k)"; exit 1 }
+foreach ($k in 'HOST_ALIAS', 'HOST_IP', 'SSH_PORT', 'WEB_URL') {
+    if (-not $conf[$k]) { Write-Host "hack.conf is incomplete (missing $k)"; exit 1 }
 }
-$HostAlias = $conf['HOST_ALIAS']; $HostIp = $conf['HOST_IP']; $SshPort = $conf['SSH_PORT']; $Repo = $conf['REPO']
-if ($HostIp -eq '__VPS_IP__') {
-    Write-Host 'hack.conf still has the placeholder HOST_IP=__VPS_IP__.'
-    Write-Host 'The repo owner has not filled in the server IP yet. Ask the admin (DKeAlvaro) and pull again.'
+$HostAlias = $conf['HOST_ALIAS']; $HostIp = $conf['HOST_IP']; $SshPort = $conf['SSH_PORT']
+$WebUrl = $conf['WEB_URL'].TrimEnd('/'); $ProjectRepo = $conf['PROJECT_REPO']
+if ($HostIp -eq '__VPS_IP__' -or $WebUrl -eq '__WEB_URL__') {
+    Write-Host 'hack.conf still has placeholders (__VPS_IP__ / __WEB_URL__).'
+    Write-Host 'The admin has not published the server address yet. Ask Alvaro, then run: git pull'
     exit 1
 }
-Write-Host "host alias $HostAlias -> ${HostIp}:$SshPort, repo $Repo"
+function Web-Sub([string]$prefix) { return ($WebUrl -replace '^(https?://)', ('$1' + $prefix + '.')) }
+Write-Host "host alias $HostAlias -> ${HostIp}:$SshPort, web $WebUrl"
 
 if (-not (Has-Command 'ssh')) {
     Write-Host 'The OpenSSH client is missing. In an ADMIN PowerShell run:'
@@ -70,30 +72,37 @@ function Test-Ssh {
 
 if ($Check) {
     if (Test-Ssh) { Write-Host "OK: ssh $HostAlias works"; exit 0 }
-    Write-Host "NOT YET: ssh $HostAlias does not work"
+    Write-Host "NOT OK: ssh $HostAlias does not work"
     exit 1
 }
 
-# ---- 2. username ----
-Step 2 'Choosing the Linux username'
-if (-not $User -and (Has-Command 'gh')) {
-    $r = Invoke-Native 'gh' 'api user -q .login' -Capture
-    if ($r.ExitCode -eq 0) {
-        $guess = $r.Out.ToLower()
-        if ($guess -match $NameRe) { $User = $guess; Write-Host "derived from GitHub login: $User" }
-    }
+# ---- 2. user and code ----
+Step 2 'Checking your name and code'
+$teamPath = Join-Path $Root 'server\team.txt'
+if (-not (Test-Path $teamPath)) { Write-Host 'server\team.txt not found'; exit 1 }
+$Team = @()
+foreach ($line in [System.IO.File]::ReadAllLines($teamPath)) {
+    $t = $line.Trim()
+    if ($t -and -not $t.StartsWith('#')) { $Team += ($t -split '\s+')[0] }
 }
+$TeamList = $Team -join ' '
+$User = ('' + $User).Trim().ToLower()
+$Code = ('' + $Code).Trim().ToLower()
+$interactive = -not [Console]::IsInputRedirected
 if (-not $User) {
-    if (-not [Console]::IsInputRedirected) {
-        $User = Read-Host 'Username on the VPS (lowercase letters, digits, hyphens)'
-    } else {
-        Write-Host 'No username known and no terminal to ask. Re-run with: -User <name>'
-        exit 1
-    }
+    if ($interactive) { $User = (Read-Host "Your name ($TeamList)").Trim().ToLower() }
+    else { Write-Host "Missing -User NAME. Choose one of: $TeamList"; exit 1 }
 }
-$User = $User.Trim().ToLower()
-if ($User -notmatch $NameRe) { Write-Host "Invalid username '$User': must match $NameRe"; exit 1 }
-Write-Host "username: $User"
+if ($Team -notcontains $User) { Write-Host "Unknown user '$User'. The team is: $TeamList"; exit 1 }
+if (-not $Code) {
+    if ($interactive) { $Code = (Read-Host 'Your personal code (xxxx-xxxx-xxxx)').Trim().ToLower() }
+    else { Write-Host 'Missing -Code CODE (the personal code Alvaro sent you).'; exit 1 }
+}
+if ($Code -notmatch $CodeRe) {
+    Write-Host 'The code does not look right. It has the form xxxx-xxxx-xxxx (letters and digits, no 0, o, 1, l, i).'
+    exit 1
+}
+Write-Host "user: $User"
 
 # ---- 3. key ----
 Step 3 'SSH key'
@@ -115,7 +124,6 @@ if (-not (Test-Path "$Key.pub")) {
     [System.IO.File]::WriteAllText("$Key.pub", $r.Out + "`n", $Utf8NoBom)
 }
 $PubKey = ([System.IO.File]::ReadAllLines("$Key.pub") | Select-Object -First 1).Trim()
-$KeyBlob = ($PubKey -split '\s+')[1]
 
 $ConfigBlock = @(
     $BeginMark,
@@ -136,13 +144,48 @@ if ($Print) {
     Write-Host "--- ssh config block ($SshDir\config) ---"
     $ConfigBlock | ForEach-Object { Write-Host $_ }
     Write-Host ''
-    Write-Host "--- public key (keys/$User.pub) ---"
+    Write-Host '--- public key ---'
     Write-Host $PubKey
     exit 0
 }
 
-# ---- 4. ssh config ----
-Step 4 "Updating $SshDir\config"
+# ---- 4. register the key with the server ----
+Step 4 "Registering your key at $WebUrl/join"
+$payload = (@{ user = $User; code = $Code; pubkey = $PubKey } | ConvertTo-Json -Compress)
+$status = 0
+$respText = ''
+try {
+    $resp = Invoke-WebRequest -Uri "$WebUrl/join" -Method Post -ContentType 'application/json' `
+        -Body ([System.Text.Encoding]::UTF8.GetBytes($payload)) -TimeoutSec 20 -UseBasicParsing
+    $status = [int]$resp.StatusCode
+    $respText = [string]$resp.Content
+} catch {
+    $ex = $_.Exception
+    if ($ex.Response) {
+        $status = [int]$ex.Response.StatusCode
+        try {
+            $sr = New-Object System.IO.StreamReader($ex.Response.GetResponseStream())
+            $respText = $sr.ReadToEnd()
+        } catch { }
+    }
+}
+switch ($status) {
+    200 {
+        if ($respText -match '"added"\s*:\s*true') { Write-Host 'key registered' } else { Write-Host 'key was already registered' }
+    }
+    403 { Write-Host 'Wrong user or code. Check the message Alvaro sent you and run again.'; exit 1 }
+    429 { Write-Host 'Too many failed tries from your network. Wait 10 minutes and run again.'; exit 1 }
+    400 { Write-Host "The server rejected the request: $($respText.Trim())"; exit 1 }
+    0 {
+        Write-Host "Cannot reach $WebUrl. Check your internet connection, or ask Alvaro whether the server is up"
+        Write-Host '(the first HTTPS certificate can take about 30 s after setup).'
+        exit 1
+    }
+    default { Write-Host "Unexpected answer from the server (HTTP $status): $($respText.Trim())"; exit 1 }
+}
+
+# ---- 5. ssh config ----
+Step 5 "Updating $SshDir\config"
 $Cfg = Join-Path $SshDir 'config'
 $old = ''
 if (Test-Path $Cfg) { $old = [System.IO.File]::ReadAllText($Cfg) }
@@ -160,142 +203,31 @@ if ($new -ceq $old) {
     Write-Host 'config block written'
 }
 
-# ---- 5. test ----
-function Show-NextSteps {
-    Write-Host ''
-    Write-Host 'You are connected. Next:'
-    Write-Host "  ssh $HostAlias            open a shell on the VPS"
-    Write-Host '  pair                       (on the VPS) shared tmux session with the team'
-    Write-Host '  ~/hack                     shared projects folder (/srv/hack)'
-    Write-Host "  VS Code / Cursor: Remote-SSH, connect to host `"$HostAlias`""
+# ---- 6. test ----
+Step 6 "Testing ssh $HostAlias"
+$ok = $false
+for ($i = 1; $i -le 3; $i++) {
+    if (Test-Ssh) { $ok = $true; break }
+    if ($i -lt 3) { Write-Host "not yet (try $i of 3), retrying in 3 s..."; Start-Sleep -Seconds 3 }
 }
-
-Step 5 "Testing ssh $HostAlias"
-if (Test-Ssh) { Write-Host "ssh $HostAlias works"; Show-NextSteps; exit 0 }
-Write-Host 'not connected yet (account probably does not exist yet)'
-
-# ---- 6. membership ----
-Step 6 "Requesting access (keys/$User.pub)"
-$KeysDir = Join-Path $Root 'keys'
-if (-not (Test-Path $KeysDir)) { New-Item -ItemType Directory -Path $KeysDir | Out-Null }
-$KeyFile = Join-Path $KeysDir "$User.pub"
-$have = $false
-if (Test-Path $KeyFile) { $have = ([System.IO.File]::ReadAllText($KeyFile)).Contains($KeyBlob) }
-if ($have) {
-    Write-Host "local keys/$User.pub already has your key"
-} else {
-    $prev = ''
-    if (Test-Path $KeyFile) { $prev = [System.IO.File]::ReadAllText($KeyFile) }
-    if ($prev.Length -gt 0 -and -not $prev.EndsWith("`n")) { $prev += "`n" }
-    [System.IO.File]::WriteAllText($KeyFile, $prev + $PubKey + "`n", $Utf8NoBom)
-    Write-Host "wrote your key to keys/$User.pub"
-}
-
-function Show-Manual {
-    Write-Host ''
-    Write-Host 'Send this public key to the admin (DKeAlvaro), or open a pull request on'
-    Write-Host "https://github.com/$Repo adding it as keys/$User.pub :"
-    Write-Host ''
-    Write-Host $PubKey
-    Write-Host ''
-}
-
-$GitGh = '-c credential.helper= -c "credential.helper=!gh auth git-credential"'
-
-function Submit-WithGh {
-    $login = (Invoke-Native 'gh' 'api user -q .login' -Capture).Out
-    $canPush = (Invoke-Native 'gh' ('api ' + (Q "repos/$Repo") + ' -q .permissions.push') -Capture).Out
-    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('hackvps-' + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $tmp | Out-Null
-    try {
-        $clone = Join-Path $tmp 'repo'
-        $r = Invoke-Native 'git' ('clone -q --depth 1 ' + (Q "https://github.com/$Repo.git") + ' ' + (Q $clone))
-        if ($r.ExitCode -ne 0) { Write-Host 'git clone failed'; return $false }
-        $ident = ''
-        if ((Invoke-Native 'git' ('-C ' + (Q $clone) + ' config user.email') -Capture).Out -eq '') {
-            $ident = '-c ' + (Q "user.name=$login") + ' -c ' + (Q "user.email=$login@users.noreply.github.com") + ' '
-        }
-        $g = '-C ' + (Q $clone) + ' '
-        New-Item -ItemType Directory -Force -Path (Join-Path $clone 'keys') | Out-Null
-        $target = Join-Path $clone "keys\$User.pub"
-        $prev = ''
-        if (Test-Path $target) { $prev = [System.IO.File]::ReadAllText($target) }
-        if ($prev.Contains($KeyBlob)) {
-            Write-Host "your key is already in $Repo main; the VPS picks it up within a minute"
-            return $true
-        }
-        if ($prev.Length -gt 0) {
-            Write-Host "WARNING: keys/$User.pub already exists upstream with other keys; adding yours as an extra line"
-            if (-not $prev.EndsWith("`n")) { $prev += "`n" }
-        }
-        [System.IO.File]::WriteAllText($target, $prev + $PubKey + "`n", $Utf8NoBom)
-        $rel = "keys/$User.pub"
-
-        if ($canPush -eq 'true') {
-            Write-Host 'you have push access: committing to main'
-            Invoke-Native 'git' ($g + 'add ' + (Q $rel)) | Out-Null
-            Invoke-Native 'git' ($g + $ident + 'commit -q -m ' + (Q "Add $User")) | Out-Null
-            $r = Invoke-Native 'git' ($g + $GitGh + ' push -q ' + (Q "https://github.com/$Repo.git") + ' HEAD:main')
-            if ($r.ExitCode -ne 0) { return $false }
-            Write-Host 'pushed to main'
-            return $true
-        }
-
-        $branch = "add-$User"
-        $existing = (Invoke-Native 'gh' ('pr list --repo ' + (Q $Repo) + ' --head ' + (Q "${login}:$branch") + ' --state open --json number -q length') -Capture).Out
-        Invoke-Native 'git' ($g + 'checkout -q -b ' + (Q $branch)) | Out-Null
-        Invoke-Native 'git' ($g + 'add ' + (Q $rel)) | Out-Null
-        Invoke-Native 'git' ($g + $ident + 'commit -q -m ' + (Q "Add $User")) | Out-Null
-        Invoke-Native 'gh' ('repo fork ' + (Q $Repo) + ' --clone=false') -Capture | Out-Null
-        $repoName = $Repo.Split('/')[1]
-        $forkUrl = "https://github.com/$login/$repoName.git"
-        $pushed = $false
-        for ($i = 1; $i -le 5; $i++) {
-            $r = Invoke-Native 'git' ($g + $GitGh + ' push -q --force ' + (Q $forkUrl) + ' ' + (Q $branch))
-            if ($r.ExitCode -eq 0) { $pushed = $true; break }
-            Write-Host 'fork not ready, retrying...'
-            Start-Sleep -Seconds 4
-        }
-        if (-not $pushed) { Write-Host "could not push to your fork $forkUrl"; return $false }
-        if ($existing -and $existing -ne '0') {
-            Write-Host "a pull request from ${login}:$branch is already open; updated it"
-        } else {
-            $r = Invoke-Native 'gh' ('pr create --repo ' + (Q $Repo) + ' --base main --head ' + (Q "${login}:$branch") +
-                ' --title ' + (Q "Add $User") + ' --body ' + (Q "Adds keys/$User.pub so $User can access the hackathon VPS."))
-            if ($r.ExitCode -ne 0) { return $false }
-        }
-        Write-Host 'Ask the admin (DKeAlvaro) to merge the pull request; the account appears within about a minute.'
-        return $true
-    } finally {
-        Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
-    }
-}
-
-if ($NoPr) {
-    Write-Host '-NoPr given: not pushing anything'
-    Show-Manual
-} elseif ((Has-Command 'gh') -and ((Invoke-Native 'gh' 'auth status' -Capture).ExitCode -eq 0)) {
-    if (-not (Submit-WithGh)) {
-        Write-Host 'Automatic submission failed.'
-        Show-Manual
-    }
-} else {
-    Write-Host 'gh is not installed or not logged in'
-    Show-Manual
-}
-
-# ---- 7. wait ----
-Step 7 'Waiting for access'
-if ($Wait -gt 0) {
-    $deadline = (Get-Date).AddMinutes($Wait)
-    while ((Get-Date) -lt $deadline) {
-        if (Test-Ssh) { Write-Host "ssh $HostAlias works"; Show-NextSteps; exit 0 }
-        Write-Host 'not yet, retrying in 15 s...'
-        Start-Sleep -Seconds 15
-    }
-    Write-Host "Timed out after $Wait minute(s). Re-run connect.ps1 -Check later."
+if (-not $ok) {
+    Write-Host "Your key is registered but ssh $HostAlias does not work from this computer."
+    Write-Host "Try: ssh -v $HostAlias true  (a firewall or school/corporate network may block port $SshPort; try a phone hotspot)."
     exit 1
 }
-Write-Host 'Not waiting. Once the admin has merged, check with:  .\connect.ps1 -Check'
-Write-Host '(or keep polling with .\connect.ps1 -Wait 10)'
-exit 1
+
+Write-Host ''
+Write-Host "You are connected as $User."
+Write-Host "  ssh $HostAlias                  open a shell on the VPS"
+Write-Host ''
+Write-Host "Web (login: user = $User, password = your code)"
+Write-Host "  $WebUrl           landing page with all links"
+Write-Host "  $(Web-Sub 'code')      VS Code in the browser (live files, editor, terminal)"
+Write-Host "  $(Web-Sub 'files')     upload / download / share files"
+Write-Host "  $(Web-Sub 'stats')     CPU, RAM, disk, processes"
+Write-Host ''
+Write-Host "Send files to the VPS:   .\send.ps1 <paths>   (macOS/Linux/Git Bash: ./send.sh <paths>)  -> ~/hack/inbox/$User/"
+Write-Host "The team project:        ~/hack/project on the VPS (repo $ProjectRepo)"
+Write-Host "VS Code / Cursor:        Remote-SSH, connect to host `"$HostAlias`""
+Write-Host "Shared terminal:         run 'pair' on the VPS"
+exit 0
