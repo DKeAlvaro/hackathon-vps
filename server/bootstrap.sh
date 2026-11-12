@@ -129,6 +129,16 @@ fi
 chown root:team /srv/hack/README.md
 chmod 664 /srv/hack/README.md
 
+# gruia agent kit (skills for Claude Code/Codex + AGENTS.md template), copied into projects on demand.
+if [ ! -d /srv/hack/kit-agentes/.git ]; then
+  git clone -q --depth 1 https://github.com/gruia-app/skills.git /srv/hack/kit-agentes \
+    || echo "WARNING: could not clone gruia-app/skills" >&2
+fi
+if [ -d /srv/hack/kit-agentes ]; then
+  chgrp -R team /srv/hack/kit-agentes
+  setfacl -R -m g:team:rwX /srv/hack/kit-agentes
+fi
+
 say "pair helper, umask, git safe.directory"
 cat > /usr/local/bin/pair <<'EOF'
 #!/usr/bin/env bash

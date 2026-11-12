@@ -64,6 +64,15 @@ commit private keys, and do not commit `keys/<username>.pub` for anyone but the 
   Node.js 22, Docker + compose, gh, Claude Code (`claude`), Codex (`codex`). Never commit secrets or
   `.env` files to the public repo; put them in untracked files.
 
+## Agent kit for the hackathon project
+
+`/srv/hack/kit-agentes` is a clone of https://github.com/gruia-app/skills: six skills (servidor-agentes,
+agentes-en-paralelo, revisar-codigo, diagnosticar-bugs, delegar-barato, relevo) plus an `AGENTS.md` template.
+When the team creates its project in `/srv/hack/<project>`, set it up once so every agent shares the same rules:
+`mkdir -p .claude/skills && cp -r /srv/hack/kit-agentes/skills/* .claude/skills/ && cp /srv/hack/kit-agentes/plantillas/AGENTS.md .`
+then fill in `AGENTS.md` in the first hour and add a `CLAUDE.md` containing `@AGENTS.md`. Work in parallel with
+one git worktree per agent (see the agentes-en-paralelo skill) instead of several agents editing one checkout.
+
 ## Troubleshooting
 
 - `Permission denied (publickey)`: the PR is not merged yet (wait a minute after merging), or the
