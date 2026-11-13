@@ -21,4 +21,4 @@ for p in "$@"; do
   qd="'${dest//$sq/$rep}'"
   ssh hack "chmod -R g+rwX $qd" || echo "warning: could not chmod $dest" >&2
 done
-echo "Sent. On the VPS: ~/hack/inbox/$USERNAME/   (browse it with Files or Code on the web page)"
+echo "Sent. On the VPS: ~/hack/inbox/$USERNAME/   (browse it in the web file explorer)"

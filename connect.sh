@@ -68,7 +68,6 @@ if [ "$HOST_IP" = "__VPS_IP__" ] || [ "$WEB_URL" = "__WEB_URL__" ]; then
   exit 1
 fi
 WEB_URL="${WEB_URL%/}"
-web_sub() { printf '%s' "$WEB_URL" | sed "s#^\\(https\\?://\\)#\\1$1.#"; }
 echo "host alias $HOST_ALIAS -> $HOST_IP:$SSH_PORT, web $WEB_URL"
 
 ssh_ok() { ssh -o BatchMode=yes -o ConnectTimeout=8 -o LogLevel=QUIET "$HOST_ALIAS" true >/dev/null 2>&1; }
@@ -263,10 +262,7 @@ You are connected as $USERNAME.
   ssh $HOST_ALIAS                  open a shell on the VPS
 
 Web (login: user = $USERNAME, password = your code)
-  $WEB_URL           landing page with all links
-  $(web_sub code)      VS Code in the browser (live files, editor, terminal)
-  $(web_sub files)     upload / download / share files
-  $(web_sub stats)     CPU, RAM, disk, processes
+  $WEB_URL           web file explorer: upload and download files
 
 Local project folder:    ${PROJECT_MSG:-not set up (see warning above)}
 

@@ -34,4 +34,4 @@ foreach ($r in $resolved) {
     & ssh hack "chmod -R g+rwX $q"
     if ($LASTEXITCODE -ne 0) { Write-Host "warning: could not chmod $dest" }
 }
-Write-Host "Sent. On the VPS: ~/hack/inbox/$User/   (browse it with Files or Code on the web page)"
+Write-Host "Sent. On the VPS: ~/hack/inbox/$User/   (browse it in the web file explorer)"

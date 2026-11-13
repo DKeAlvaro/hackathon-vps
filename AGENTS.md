@@ -34,8 +34,7 @@ so always pass the name and code as arguments.
 4. **Verify:** `ssh hack 'whoami; ls ~/hack'`. `whoami` must print the chosen name.
 5. **Give the user the summary** printed by the script:
    - `ssh hack` opens a shell on the VPS.
-   - Web links (login: user = their name, password = their code): landing page, Code (VS Code in the
-     browser), Files (upload/download), Stats.
+   - Web file explorer at `WEB_URL` (login: user = their name, password = their code) to upload and download files.
    - Send files with `./send.sh <paths>` (Windows: `.\send.ps1 <paths>`); they land in `~/hack/inbox/<name>/`.
    - The local project folder (`hackathon`), where they code with their own agent, and the workflow in
      "How we work" below. The live copy of main is `~/hack/project` on the VPS.
@@ -53,7 +52,7 @@ clone that the connect script creates. (Claude Code and Codex are installed on t
 - **Git.** The VPS is `origin` (`hack:/srv/hack/project.git`, a shared bare repo). Work on a branch
   `<user>/<feature>`, push it (`git push -u origin <user>/<feature>`), merge into `main` often, and run
   `git pull --rebase` before pushing `main`. `main` cannot be force-pushed or deleted (the server rejects it).
-  Every push to `main` updates the live checkout `~/hack/project` on the VPS (visible in the web Code/Files
+  Every push to `main` updates the live checkout `~/hack/project` on the VPS (visible in the web file explorer
   tools) and is mirrored in the background to GitHub `DKeAlvaro/hackathon`. GitHub is only a mirror/backup:
   never push there directly.
 - **Parallel agents on one laptop:** use `git worktree` locally, one worktree per agent
@@ -72,11 +71,8 @@ clone that the connect script creates. (Claude Code and Codex are installed on t
 - Git identity: the connect script sets a repo-local `user.name` (your display name) and `user.email`
   (`<user>@hackathon.local`) in your clone if you have no global identity.
 - `pair` is a shared tmux session everyone can join (`pair <name>` for more sessions). Detach with Ctrl-b d.
-- Web tools (log in with your name and personal code): Code `https://code.<base>` is VS Code in the browser,
-  its file explorer updates live, so it is the real-time view of the files, plus editor, terminal, previews,
-  drag-and-drop upload and right-click download. Files `https://files.<base>` is simple upload, download and
-  share links. Stats `https://stats.<base>` is CPU, RAM, disk, processes and Docker. `<base>` is in `hack.conf`
-  (`WEB_URL`).
+- Web: `WEB_URL` (in `hack.conf`) is a file explorer (File Browser) on `/srv/hack` to upload and download files.
+  Log in with your name and personal code.
 - Ports open in the firewall: 22, 80, 443, 3000-3999, 5000-5999, 8000-8999 (tcp). Bind dev servers to
   `0.0.0.0` and open `http://<server-ip>:<port>`. Docker-published ports (`-p 8080:80`) bypass ufw and are
   reachable from the internet; use `-p 127.0.0.1:8080:80` to keep one private.
@@ -123,7 +119,7 @@ Skills that assume agents run on the server do not apply: agents run locally.
 - Fresh server, as root: `curl -fsSL https://raw.githubusercontent.com/DKeAlvaro/hackathon-vps/main/server/bootstrap.sh | bash`
   (it clones itself to `/opt/hackathon-vps`). Afterwards: `bash /opt/hackathon-vps/server/bootstrap.sh`. It is idempotent.
   It installs `server/admin.pub` (Alvaro's key) for root and alvaro, creates the team users from `server/team.txt`,
-  generates the codes, installs Caddy, code-server, File Browser, Glances and the join service, and prints a summary:
+  generates the codes, installs Caddy, File Browser and the join service, and prints a summary:
   URLs, the codes table, deploy key status, central repo and live checkout status, service statuses.
 - Then: put the server IP and `https://<ip-dashed>.sslip.io` in `hack.conf` (`HOST_IP`, `WEB_URL`), commit and push.
   Send each friend: "Tell your agent: clone https://github.com/DKeAlvaro/hackathon-vps and connect me to the VPS.
@@ -144,13 +140,12 @@ Skills that assume agents run on the server do not apply: agents run locally.
   it into `main` on a laptop (fetch from the server's bare repo after that fetch, or add GitHub as a second remote)
   and push `main` to the VPS; the next mirror push then succeeds.
 - Codes live in `/etc/hack/codes` (`<user> <code>` per line, root only, never in the repo). They are also each
-  person's password for the web tools (Caddy basic auth).
+  person's password for the web file explorer (Caddy basic auth).
 - Update path: push to `main`, then `ssh root@<ip> 'cd /opt/hackathon-vps && git pull -q && bash server/bootstrap.sh'`.
 - Add a person: add `<username> <Display Name>` to `server/team.txt`, push, update on the server (new user, code,
-  and Caddy login appear). Also add the name to the landing page text if you want.
+  and Caddy login appear).
 - Revoke or rotate a code: edit its line in `/etc/hack/codes` (or delete the line and re-run bootstrap for a new
   one), re-run bootstrap so the Caddy hashes update, and remove that person's key lines from
   `/home/<user>/.ssh/authorized_keys` (the join endpoint appends, max 10 keys per user).
-- Logs: `journalctl -u hack-join` (one line per join attempt, codes are never logged), `-u caddy`, `-u hack-code`,
-  `-u hack-files`, `-u hack-stats`.
+- Logs: `journalctl -u hack-join` (one line per join attempt, codes are never logged), `-u caddy`, `-u hack-files`.
 - Never merge changes to `server/` from anyone without reading them: bootstrap runs as root.

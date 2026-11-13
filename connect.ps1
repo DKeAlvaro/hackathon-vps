@@ -59,7 +59,6 @@ if ($HostIp -eq '__VPS_IP__' -or $WebUrl -eq '__WEB_URL__') {
     Write-Host 'The admin has not published the server address yet. Ask Alvaro, then run: git pull'
     exit 1
 }
-function Web-Sub([string]$prefix) { return ($WebUrl -replace '^(https?://)', ('$1' + $prefix + '.')) }
 Write-Host "host alias $HostAlias -> ${HostIp}:$SshPort, web $WebUrl"
 
 if (-not (Has-Command 'ssh')) {
@@ -306,10 +305,7 @@ Write-Host "You are connected as $User."
 Write-Host "  ssh $HostAlias                  open a shell on the VPS"
 Write-Host ''
 Write-Host "Web (login: user = $User, password = your code)"
-Write-Host "  $WebUrl           landing page with all links"
-Write-Host "  $(Web-Sub 'code')      VS Code in the browser (live files, editor, terminal)"
-Write-Host "  $(Web-Sub 'files')     upload / download / share files"
-Write-Host "  $(Web-Sub 'stats')     CPU, RAM, disk, processes"
+Write-Host "  $WebUrl           web file explorer: upload and download files"
 Write-Host ''
 Write-Host "Local project folder:    $ProjectMsg"
 Write-Host ''

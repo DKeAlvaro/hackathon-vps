@@ -132,7 +132,7 @@ say "Group team, passwordless sudo, shared directory"
 getent group team >/dev/null || groupadd team
 getent group docker >/dev/null || groupadd docker
 tmpf="$(mktemp)"
-echo '%team ALL=(ALL) NOPASSWD:ALL' > "$tmpf"
+echo "$(IFS=,; echo "${TEAM_USERS[*]}") ALL=(ALL) NOPASSWD:ALL" > "$tmpf"   # humans only, not the hackweb service user
 if visudo -cf "$tmpf" >/dev/null; then
   install -m 0440 -o root -g root "$tmpf" /etc/sudoers.d/team
 else
@@ -369,7 +369,7 @@ EOF
 chmod 644 /etc/profile.d/hack.sh
 git config --system safe.directory '*'
 
-# ---- web command center --------------------------------------------------------
+# ---- web file explorer --------------------------------------------------------
 say "Public hostname"
 BASE="${HACK_DOMAIN:-}"
 PUBLIC_IP=""
@@ -383,14 +383,14 @@ if [ -z "$BASE" ]; then
   fi
 fi
 if [ -n "$BASE" ] && ! [[ "$BASE" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]; then
-  warn "invalid domain '$BASE': web tools skipped"
+  warn "invalid domain '$BASE': web file explorer skipped"
   BASE=""
 fi
 if [ -n "$BASE" ]; then
   echo "$BASE" > /etc/hack/domain
   echo "BASE = $BASE"
 else
-  warn "could not detect the public IPv4 (set HACK_DOMAIN=<name> and re-run): web tools skipped"
+  warn "could not detect the public IPv4 (set HACK_DOMAIN=<name> and re-run): web file explorer skipped"
 fi
 
 say "hackweb service user"
@@ -408,62 +408,24 @@ if [ -z "$(git config --file /var/lib/hackweb/.gitconfig --get user.name 2>/dev/
   chown hackweb:team /var/lib/hackweb/.gitconfig
 fi
 
-say "code-server (https://code.BASE)"
-if ! command -v code-server >/dev/null; then
-  curl -fsSL https://code-server.dev/install.sh | sh \
-    || warn "code-server install failed; retry: curl -fsSL https://code-server.dev/install.sh | sh"
+say "Remove old web tools (code-server, Glances, landing page)"
+for svc in hack-code hack-stats; do
+  systemctl disable --now "$svc" >/dev/null 2>&1 || true
+  rm -f "/etc/systemd/system/$svc.service"
+done
+if dpkg -s code-server >/dev/null 2>&1; then
+  apt-get remove -y code-server >/dev/null 2>&1 || dpkg -r code-server >/dev/null 2>&1 || warn "could not remove code-server"
 fi
-CS_USER_DIR=/var/lib/hackweb/code-server/data
-install -d -o hackweb -g team -m 750 /var/lib/hackweb/code-server /var/lib/hackweb/code-server/data \
-  /var/lib/hackweb/code-server/extensions "$CS_USER_DIR/User"
-if [ ! -f "$CS_USER_DIR/User/settings.json" ]; then
-  cat > "$CS_USER_DIR/User/settings.json" <<'EOF'
-{
-  "workbench.startupEditor": "none",
-  "workbench.colorTheme": "Default Dark Modern",
-  "security.workspace.trust.enabled": false,
-  "telemetry.telemetryLevel": "off",
-  "files.exclude": {
-    "**/node_modules": true,
-    "**/.venv": true,
-    "**/__pycache__": true,
-    "**/dist": true,
-    "**/build": true,
-    "**/.next": true
-  },
-  "files.watcherExclude": {
-    "**/node_modules/**": true,
-    "**/.venv/**": true,
-    "**/__pycache__/**": true,
-    "**/dist/**": true,
-    "**/build/**": true,
-    "**/.next/**": true,
-    "**/.git/objects/**": true
-  }
-}
-EOF
-  chown hackweb:team "$CS_USER_DIR/User/settings.json"
+if command -v uv >/dev/null 2>&1; then
+  UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin uv tool uninstall glances >/dev/null 2>&1 || true
 fi
-cat > /etc/systemd/system/hack-code.service <<'EOF'
-[Unit]
-Description=code-server (shared VS Code in the browser)
-After=network.target
+if dpkg -s glances >/dev/null 2>&1; then
+  apt-get remove -y glances >/dev/null 2>&1 || warn "could not remove glances"
+fi
+rm -rf /var/www/hack /var/lib/hackweb/code-server /opt/uv-tools/glances
+systemctl daemon-reload
 
-[Service]
-User=hackweb
-Group=team
-UMask=0002
-Environment=HOME=/var/lib/hackweb
-WorkingDirectory=/srv/hack
-ExecStart=/usr/bin/code-server --bind-addr 127.0.0.1:8790 --auth none --disable-telemetry --disable-update-check --user-data-dir /var/lib/hackweb/code-server/data --extensions-dir /var/lib/hackweb/code-server/extensions /srv/hack
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-say "File Browser (https://files.BASE)"
+say "File Browser (https://BASE)"
 FB=/usr/local/bin/filebrowser
 if [ ! -x "$FB" ]; then
   fbtmp="$(mktemp -d)"
@@ -481,7 +443,7 @@ if [ -x "$FB" ]; then
   systemctl stop hack-files 2>/dev/null || true
   fb() { runuser -u hackweb -- "$FB" -d "$FB_DB" "$@"; }
   [ -f "$FB_DB" ] || fb config init >/dev/null
-  fb config set -a 127.0.0.1 -p 8791 -r /srv/hack -b "" --auth.method=proxy --auth.header=X-Remote-User >/dev/null \
+  fb config set -a 127.0.0.1 -p 8791 -r /srv/hack -b "" --auth.method=proxy --auth.header=X-Remote-User --branding.name hackathon --hideDotfiles >/dev/null \
     || warn "filebrowser config set failed"
   existing_fb="$(fb users ls 2>/dev/null || true)"
   for u in "${TEAM_USERS[@]}"; do
@@ -512,36 +474,6 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
-say "Glances (https://stats.BASE)"
-GLANCES=""
-if ! command -v glances >/dev/null; then
-  if command -v uv >/dev/null; then
-    mkdir -p /opt/uv-tools
-    export UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin
-    uv tool install 'glances[web,containers]' >/dev/null 2>&1 \
-      || uv tool install 'glances[web]' >/dev/null 2>&1 || true
-    unset UV_TOOL_DIR UV_TOOL_BIN_DIR
-  fi
-  if ! command -v glances >/dev/null; then
-    apt-get install "${APT_OPTS[@]}" glances python3-bottle python3-jinja2 \
-      || warn "glances install failed (uv and apt)"
-  fi
-fi
-GLANCES="$(command -v glances || true)"
-cat > /etc/systemd/system/hack-stats.service <<EOF
-[Unit]
-Description=Glances web UI (machine stats)
-After=network.target docker.service
-
-[Service]
-ExecStart=${GLANCES:-/usr/local/bin/glances} -w --bind 127.0.0.1 --port 8793
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
 say "Join service (127.0.0.1:8792)"
 cat > /etc/systemd/system/hack-join.service <<EOF
 [Unit]
@@ -561,7 +493,7 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-for s in hack-code hack-files hack-stats hack-join; do
+for s in hack-files hack-join; do
   systemctl enable "$s" >/dev/null 2>&1 || true
   systemctl restart "$s" || warn "service $s failed to start (journalctl -u $s)"
 done
@@ -579,10 +511,6 @@ fi
 
 CADDY_STATUS="skipped"
 if [ -n "$BASE" ] && command -v caddy >/dev/null; then
-  install -d -m 755 /var/www/hack
-  sed "s/__BASE__/$BASE/g" "$SERVER_DIR/web/index.html" > /var/www/hack/index.html
-  chmod 644 /var/www/hack/index.html
-
   render_caddyfile() {
     printf '# Generated by bootstrap.sh, do not edit by hand.\n'
     printf '(auth) {\n\tbasic_auth {\n'
@@ -601,24 +529,12 @@ $BASE {
 	}
 	handle {
 		import auth
-		root * /var/www/hack
-		file_server
+		import proxy 8791
 	}
 }
 
-code.$BASE {
-	import auth
-	import proxy 8790
-}
-
 files.$BASE {
-	import auth
-	import proxy 8791
-}
-
-stats.$BASE {
-	import auth
-	import proxy 8793
+	redir https://$BASE{uri} permanent
 }
 EOF
   }
@@ -646,8 +562,7 @@ echo "  Hackathon VPS"
 echo "  Shared folder : ~/hack  (/srv/hack)   live main: ~/hack/project"
 echo "  Shared tmux   : run 'pair'  (or 'pair <name>')"
 if [ -n "$base" ]; then
-  echo "  Web           : https://$base"
-  echo "                  https://code.$base   https://files.$base   https://stats.$base"
+  echo "  Web files     : https://$base  (upload / download, login: name + code)"
 fi
 echo "  Online now    : $(who | awk '{print $1}' | sort -u | tr '\n' ' ')"
 echo "  Open ports    : 3000-3999, 5000-5999, 8000-8999, 80, 443"
@@ -698,10 +613,7 @@ fi
 say "Summary"
 if [ -n "$BASE" ]; then
   echo "Web (first HTTPS certificate can take ~30 s; login = user name + personal code):"
-  echo "  https://$BASE"
-  echo "  https://code.$BASE    VS Code in the browser (live files, editor, terminal)"
-  echo "  https://files.$BASE   File Browser"
-  echo "  https://stats.$BASE   Glances"
+  echo "  https://$BASE   File Browser (upload / download)"
   echo "Fill in hack.conf in the repo, commit and push:"
   echo "  HOST_IP=${PUBLIC_IP:-<server ip>}"
   echo "  WEB_URL=https://$BASE"
@@ -728,7 +640,7 @@ echo "Members    : $(getent group team | cut -d: -f4)"
 echo "Node       : $(node --version), Docker: $(docker --version 2>/dev/null || echo missing)"
 echo "ufw        : $(ufw status | head -1)"
 echo "Services   :"
-for s in hack-code hack-files hack-stats hack-join caddy fail2ban; do
+for s in hack-files hack-join caddy fail2ban; do
   printf '  %-12s %s\n' "$s" "$(systemctl is-active "$s" 2>/dev/null || true)"
 done
 echo "Caddy config: $CADDY_STATUS"
