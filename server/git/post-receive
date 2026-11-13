@@ -23,7 +23,10 @@ if [ "$main_updated" -eq 1 ] && [ -d "$LIVE/.git" ]; then
 fi
 
 if [ "${HACK_MIRROR:-1}" != "0" ] && git --git-dir="$BARE" remote get-url "$REMOTE" >/dev/null 2>&1; then
-  (nohup git --git-dir="$BARE" push -q --prune "$REMOTE" 'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*' \
-    >>"$LOG" 2>&1 </dev/null &)
+  (
+    out="$(git --git-dir="$BARE" push -q --prune "$REMOTE" 'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*' 2>&1 </dev/null)"       || { printf '%s mirror push failed:
+%s
+' "$(date -Is)" "$out" >>"$LOG"; }
+  ) >/dev/null 2>&1 </dev/null &
 fi
 exit 0
