@@ -58,8 +58,7 @@ clone. Nobody runs agents on the VPS: it has 6 GB RAM shared by 4 people.
 
 - `origin` is the VPS (`hack:/srv/hack/project.git`). Branch per task `<you>/<feature>`, push it, merge into
   `main` often (`git pull --rebase` before pushing `main`). `main` cannot be force-pushed or deleted.
-- Every push to `main` updates the live checkout `~/hack/project` on the VPS (see it in the web file explorer
-  tools) and mirrors to GitHub `DKeAlvaro/hackathon`. Never push to GitHub directly.
+- Every push to `main` updates the live checkout `~/hack/project` on the VPS (see it in the web file explorer) and mirrors to GitHub `DKeAlvaro/hackathon`. Never push to GitHub directly.
 - Several agents on one laptop: one `git worktree` per agent.
 - The VPS runs the shared demo/backend/database (`ssh hack`, `cd ~/hack/project`, bind `0.0.0.0` on
   3000-3999/5000-5999/8000-8999, use tmux/`pair` or Docker) and holds shared files (`~/hack/`,

@@ -52,8 +52,7 @@ clone that the connect script creates. (Claude Code and Codex are installed on t
 - **Git.** The VPS is `origin` (`hack:/srv/hack/project.git`, a shared bare repo). Work on a branch
   `<user>/<feature>`, push it (`git push -u origin <user>/<feature>`), merge into `main` often, and run
   `git pull --rebase` before pushing `main`. `main` cannot be force-pushed or deleted (the server rejects it).
-  Every push to `main` updates the live checkout `~/hack/project` on the VPS (visible in the web file explorer
-  tools) and is mirrored in the background to GitHub `DKeAlvaro/hackathon`. GitHub is only a mirror/backup:
+  Every push to `main` updates the live checkout `~/hack/project` on the VPS (visible in the web file explorer) and is mirrored in the background to GitHub `DKeAlvaro/hackathon`. GitHub is only a mirror/backup:
   never push there directly.
 - **Parallel agents on one laptop:** use `git worktree` locally, one worktree per agent
   (`git worktree add ../hackathon-<feature> -b <user>/<feature>`). Never let two agents edit one checkout.
