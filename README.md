@@ -3,7 +3,7 @@
 One shared Ubuntu 24.04 server for our 72-hour hackathon: the team's command center. Everyone gets their own
 account (SSH key only), a shared folder, and a few web tools.
 
-Server: __VPS_SPECS__
+Server: Hostbrr, Frankfurt, 2 vCPU, 6 GB RAM, 80 GB NVMe, Ubuntu 24.04
 
 ## The 30-second version
 
