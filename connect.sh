@@ -243,6 +243,8 @@ if [ "$NO_PROJECT" -ne 1 ]; then
   fi
   # Repo-local identity only when there is no global one.
   if [ -d "$PROJECT_DIR/.git" ] && [ "$(git -C "$PROJECT_DIR" remote get-url origin 2>/dev/null || true)" = "$PROJECT_URL" ]; then
+    git -C "$PROJECT_DIR" config hackathon.user "$USERNAME"
+    echo "hackathon.user set to $USERNAME"
     DISPLAY_NAME="$(awk -v u="$USERNAME" 'NF && $1 == u { $1=""; sub(/^ +/, ""); sub(/\r$/, ""); print; exit }' "$ROOT/server/team.txt")"
     [ -n "$DISPLAY_NAME" ] || DISPLAY_NAME="$USERNAME"
     if [ -z "$(git config --global user.name 2>/dev/null || true)" ]; then
@@ -256,22 +258,16 @@ if [ "$NO_PROJECT" -ne 1 ]; then
   fi
 fi
 
+if [ "$NO_PROJECT" -ne 1 ] && [ -d "$PROJECT_DIR/.git" ] && [ -n "$PROJECT_MSG" ]; then
+  NEXT="Next: open Claude Code in $PROJECT_DIR and type /start"
+else
+  NEXT="Project folder not set up (see above)."
+fi
+
 cat <<EOF
 
 You are connected as $USERNAME.
-  ssh $HOST_ALIAS                  open a shell on the VPS
-
-Web (login: user = $USERNAME, password = your code)
-  $WEB_URL           web file explorer: upload and download files
-
-Local project folder:    ${PROJECT_MSG:-not set up (see warning above)}
-
-How we work
-  1. Code with your own agent in that folder (nobody runs agents on the VPS: 6 GB RAM for 4 people).
-  2. git pull --rebase && git push   (origin = the VPS; a push to main updates ~/hack/project on the VPS
-     and mirrors to GitHub $PROJECT_REPO; use branches <you>/<feature> for work in progress)
-  3. Big files and data: ./send.sh <paths>   (Windows: .\send.ps1 <paths>)  -> ~/hack/inbox/$USERNAME/
-
-VS Code / Cursor on the VPS files: Remote-SSH, connect to host "$HOST_ALIAS"
-Shared terminal:         run 'pair' on the VPS
+  $NEXT
+  ssh $HOST_ALIAS          shell on the VPS
+  $WEB_URL   web file explorer (login: $USERNAME + your code)
 EOF

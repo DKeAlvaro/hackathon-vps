@@ -1,5 +1,8 @@
 # hackathon-vps
 
+For agents: read `AGENTS.md` and follow "When the user asks to set up / connect".
+Do not improvise a setup from this README.
+
 One shared Ubuntu 24.04 server for our 72-hour hackathon: the team's command center. Everyone gets their own
 account (SSH key only), a shared folder, and a few web tools.
 
@@ -9,11 +12,10 @@ Server: Hostbrr, Frankfurt, 2 vCPU, 6 GB RAM, 80 GB NVMe, Ubuntu 24.04
 
 Alvaro sends you a message like this:
 
-> Tell your agent: clone https://github.com/DKeAlvaro/hackathon-vps and connect me to the VPS.
-> I'm bence, my code is k7m2-p9qx-4hzt
+> Set up github.com/DKeAlvaro/hackathon-vps for me, I'm bence, my code is k7m2-p9qx-4hzt
 
-Paste it into your coding agent (Claude Code, Codex, Cursor, ...). The agent reads `AGENTS.md` and does
-everything. When it is done, `ssh hack` works and you get the web links.
+Paste it into Claude Code (or another coding agent). When it is done, open Claude Code in the `hackathon` folder
+it created and type `/start`.
 
 The team: `alvaro`, `bence`, `aranguren`, `hector`. Your code is personal: do not share it.
 
@@ -53,16 +55,8 @@ Files land in `~/hack/inbox/<you>/` on the VPS. Get files back with `scp -r hack
 
 ## How we work
 
-Everyone codes on their own machine with their own agent (Claude Code, Codex, ...) in the local `hackathon`
-clone. Nobody runs agents on the VPS: it has 6 GB RAM shared by 4 people.
-
-- `origin` is the VPS (`hack:/srv/hack/project.git`). Branch per task `<you>/<feature>`, push it, merge into
-  `main` often (`git pull --rebase` before pushing `main`). `main` cannot be force-pushed or deleted.
-- Every push to `main` updates the live checkout `~/hack/project` on the VPS (see it in the web file explorer) and mirrors to GitHub `DKeAlvaro/hackathon`. Never push to GitHub directly.
-- Several agents on one laptop: one `git worktree` per agent.
-- The VPS runs the shared demo/backend/database (`ssh hack`, `cd ~/hack/project`, bind `0.0.0.0` on
-  3000-3999/5000-5999/8000-8999, use tmux/`pair` or Docker) and holds shared files (`~/hack/`,
-  `~/hack/inbox/<you>/`). Do not edit files in `~/hack/project`: it is reset to `main` on every push.
+Everyone codes on their own machine with their own Claude Code in the local `hackathon` clone: `/start`, `/ship`,
+`/demo`. The workflow is in that repo's `AGENTS.md`. Nobody runs agents on the VPS (6 GB RAM shared by 4 people).
 
 ## On the server
 

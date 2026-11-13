@@ -260,6 +260,8 @@ function Setup-Project([string]$Url, [string]$Dir, [string]$UserName, [string]$T
         return ''
     }
     if ((Test-Path (Join-Path $Dir '.git')) -and ((Invoke-Native 'git' ('-C ' + (Q $Dir) + ' remote get-url origin') -Capture).Out -eq $Url)) {
+        Invoke-Native 'git' ('-C ' + (Q $Dir) + ' config hackathon.user ' + (Q $UserName)) | Out-Null
+        Write-Host "hackathon.user set to $UserName"
         $display = ''
         foreach ($line in [System.IO.File]::ReadAllLines($TeamFile)) {
             $t = $line.Trim()
@@ -282,6 +284,7 @@ function Setup-Project([string]$Url, [string]$Dir, [string]$UserName, [string]$T
 }
 
 $ProjectMsg = 'skipped (-NoProject)'
+$ProjectDirFinal = ''
 if (-not $NoProject) {
     $ProjectUrl = $env:HACK_PROJECT_URL
     if (-not $ProjectUrl) { $ProjectUrl = "${HostAlias}:/srv/hack/project.git" }
@@ -296,25 +299,15 @@ if (-not $NoProject) {
         $ProjectMsg = ''
     } else {
         $ProjectMsg = Setup-Project $ProjectUrl $ProjectPath $User $teamPath
+        if ($ProjectMsg -and (Test-Path (Join-Path $ProjectPath '.git'))) { $ProjectDirFinal = $ProjectPath }
     }
 }
 if (-not $ProjectMsg) { $ProjectMsg = 'not set up (see warning above)' }
 
 Write-Host ''
 Write-Host "You are connected as $User."
-Write-Host "  ssh $HostAlias                  open a shell on the VPS"
-Write-Host ''
-Write-Host "Web (login: user = $User, password = your code)"
-Write-Host "  $WebUrl           web file explorer: upload and download files"
-Write-Host ''
-Write-Host "Local project folder:    $ProjectMsg"
-Write-Host ''
-Write-Host 'How we work'
-Write-Host '  1. Code with your own agent in that folder (nobody runs agents on the VPS: 6 GB RAM for 4 people).'
-Write-Host "  2. git pull --rebase; git push   (origin = the VPS; a push to main updates ~/hack/project on the VPS"
-Write-Host "     and mirrors to GitHub $ProjectRepo; use branches <you>/<feature> for work in progress)"
-Write-Host "  3. Big files and data: .\send.ps1 <paths>   (macOS/Linux/Git Bash: ./send.sh <paths>)  -> ~/hack/inbox/$User/"
-Write-Host ''
-Write-Host "VS Code / Cursor on the VPS files: Remote-SSH, connect to host `"$HostAlias`""
-Write-Host "Shared terminal:         run 'pair' on the VPS"
+if ($ProjectDirFinal) { Write-Host "  Next: open Claude Code in $ProjectDirFinal and type /start" }
+else { Write-Host "  Project folder: $ProjectMsg" }
+Write-Host "  ssh $HostAlias          shell on the VPS"
+Write-Host "  $WebUrl   web file explorer (login: $User + your code)"
 exit 0

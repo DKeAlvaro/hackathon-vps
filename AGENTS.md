@@ -5,81 +5,41 @@ This repo is the access kit for ONE shared Ubuntu 24.04 VPS, the "command center
 code; the connect script uses it to install this computer's SSH key on the server. The repo is public:
 never put secrets (codes, tokens, private keys) in it. Connection details live in `hack.conf`.
 
-## When the user says "connect me to the VPS" (or similar, in any language)
+## When the user asks to set up / connect
 
-Run each command as its own short call (under 30 seconds). Agents have no terminal to answer prompts,
-so always pass the name and code as arguments.
+Triggers: anything like "set up github.com/DKeAlvaro/hackathon-vps for me, I'm <name>, code <code>" or
+"connect me to the VPS" (any language). Run each command as its own short call (under 30 seconds). Agents have
+no terminal to answer prompts, so always pass the name and code as arguments.
 
-1. **Get the two facts.** Their name, one of `alvaro`, `bence`, `aranguren`, `hector`, and the personal
-   code Alvaro sent them (format `xxxx-xxxx-xxxx`). If the user did not give both, ask for the missing one.
+1. **Get the two facts.** Name: one of `alvaro`, `bence`, `aranguren`, `hector`. Code: the personal code Alvaro
+   sent (`xxxx-xxxx-xxxx`). If either is missing, ask for it.
 2. **Be inside the repo.** If the current directory has no `connect.sh` and `hack.conf`, run
-   `git clone https://github.com/DKeAlvaro/hackathon-vps.git` and `cd hackathon-vps`.
-   If it is already a clone, run `git pull --ff-only`.
-3. **Run the connect script for their OS.**
-   - Windows (PowerShell, the default on Windows):
-     `powershell -ExecutionPolicy Bypass -File .\connect.ps1 -User <name> -Code <code>`
-   - macOS, Linux, or Git Bash: `./connect.sh -u <name> -c <code>`
+   `git clone https://github.com/DKeAlvaro/hackathon-vps.git` and `cd hackathon-vps`. If it is already a clone,
+   `git pull --ff-only`.
+3. **Run `./connect.sh -u <name> -c <code>`.** Claude Code on Windows runs Git Bash, so this works on every OS.
+   Use `powershell -ExecutionPolicy Bypass -File .\connect.ps1 -User <name> -Code <code>` only as a fallback
+   for plain PowerShell. The script creates `~/.ssh/hack_ed25519`, registers the key with the server (the code is
+   the proof), writes a managed `Host hack` block in `~/.ssh/config`, tests `ssh hack`, clones the team project
+   to the sibling folder `hackathon` (`git clone hack:/srv/hack/project.git`) and sets
+   `git config hackathon.user <name>` there. Flags: `--check` (only test ssh), `--print`, `--project-dir <path>`,
+   `--no-project`. Errors are explained in plain text (wrong code 403, too many tries 429: wait 10 minutes,
+   server unreachable, ssh blocked). If `hack.conf` has `__VPS_IP__`, the admin has not published the address:
+   tell the user to ask Alvaro, then `git pull`.
+4. **Verify:** `ssh hack whoami` must print the chosen name.
+5. **Tell the user exactly:** "Done. Open Claude Code in <projectdir> and type /start." (`<projectdir>` is the
+   absolute path of the `hackathon` folder the script printed.) Add `ssh hack` and the web file explorer URL
+   (`WEB_URL`; login = their name + code).
 
-   It creates `~/.ssh/hack_ed25519` if missing, registers the public key at the server's `/join`
-   endpoint (the code is the proof), writes a managed `Host hack` block into `~/.ssh/config`, and tests
-   `ssh hack` (3 tries). Other flags: `--check` / `-Check` (only test ssh, exit 0 or 1),
-   `--print` / `-Print` (show the config block and public key only).
-   After the ssh test it also clones the team project to a sibling folder `hackathon` (next to this repo):
-   `git clone hack:/srv/hack/project.git`. `--project-dir <path>` / `-ProjectDir` changes the folder,
-   `--no-project` / `-NoProject` skips it. If the clone fails (server repo not created yet) it only warns.
-   Errors are explained in plain text: wrong code (403), too many tries (429, wait 10 minutes),
-   server unreachable, ssh blocked.
-   If `hack.conf` still contains `__VPS_IP__` / `__WEB_URL__`, the admin has not published the address
-   yet: tell the user to ask Alvaro, then `git pull`.
-4. **Verify:** `ssh hack 'whoami; ls ~/hack'`. `whoami` must print the chosen name.
-5. **Give the user the summary** printed by the script:
-   - `ssh hack` opens a shell on the VPS.
-   - Web file explorer at `WEB_URL` (login: user = their name, password = their code) to upload and download files.
-   - Send files with `./send.sh <paths>` (Windows: `.\send.ps1 <paths>`); they land in `~/hack/inbox/<name>/`.
-   - The local project folder (`hackathon`), where they code with their own agent, and the workflow in
-     "How we work" below. The live copy of main is `~/hack/project` on the VPS.
-   - `pair` on the VPS attaches to the shared tmux session.
-
-Never edit `~/.ssh/config` by hand outside the `# >>> hackathon-vps >>>` block, never print or commit
-private keys or codes, and never register a key for anyone but the user you are helping.
+Never edit `~/.ssh/config` by hand outside the `# >>> hackathon-vps >>>` block, never print or commit private
+keys or codes, and never register a key for anyone but the user you are helping.
 
 ## How we work
 
-The VPS is the hub, not a workstation: it has only 6 GB RAM shared by 4 people, so **nobody runs coding agents
-on the VPS**. Everyone codes on their own machine with their own Claude Code / Codex, in the local `hackathon`
-clone that the connect script creates. (Claude Code and Codex are installed on the server, but do not use them.)
-
-- **Git.** The VPS is `origin` (`hack:/srv/hack/project.git`, a shared bare repo). Work on a branch
-  `<user>/<feature>`, push it (`git push -u origin <user>/<feature>`), merge into `main` often, and run
-  `git pull --rebase` before pushing `main`. `main` cannot be force-pushed or deleted (the server rejects it).
-  Every push to `main` updates the live checkout `~/hack/project` on the VPS (visible in the web file explorer) and is mirrored in the background to GitHub `DKeAlvaro/hackathon`. GitHub is only a mirror/backup:
-  never push there directly.
-- **Parallel agents on one laptop:** use `git worktree` locally, one worktree per agent
-  (`git worktree add ../hackathon-<feature> -b <user>/<feature>`). Never let two agents edit one checkout.
-- **What the VPS is for:**
-  - Running the shared demo, backend or database: `ssh hack`, `cd ~/hack/project`, bind to `0.0.0.0` on
-    3000-3999, 5000-5999 or 8000-8999, and use `tmux` (or `pair`) so it keeps running; or Docker.
-  - Shared data and files: `send.sh` / `send.ps1` put files in `~/hack/inbox/<user>/`; `~/hack/` holds shared assets.
-  - Looking at things live in the browser (web tools below).
-- **Do not edit files inside `~/hack/project`**: it is reset to `main` on every push and edits are lost. Work in
-  your local clone (or a separate folder in `~/hack` for experiments).
-- Layout of `~/hack` = `/srv/hack` (group `team`, setgid plus default ACLs, so everything anyone creates is
-  readable and writable by the whole team):
-  - `project/`: live checkout of `main`. `project.git/`: the central repo. `.mirror.log`: GitHub mirror log.
-  - `inbox/<user>/`: files sent from laptops. `kit-agentes/`: agent kit (see below).
-- Git identity: the connect script sets a repo-local `user.name` (your display name) and `user.email`
-  (`<user>@hackathon.local`) in your clone if you have no global identity.
-- `pair` is a shared tmux session everyone can join (`pair <name>` for more sessions). Detach with Ctrl-b d.
-- Web: `WEB_URL` (in `hack.conf`) is a file explorer (File Browser) on `/srv/hack` to upload and download files.
-  Log in with your name and personal code.
-- Ports open in the firewall: 22, 80, 443, 3000-3999, 5000-5999, 8000-8999 (tcp). Bind dev servers to
-  `0.0.0.0` and open `http://<server-ip>:<port>`. Docker-published ports (`-p 8080:80`) bypass ufw and are
-  reachable from the internet; use `-p 127.0.0.1:8080:80` to keep one private.
-- RAM is 6 GB for everyone: check `free -h` and `htop` before heavy builds or demo runs.
-- You have passwordless `sudo` and are in the `docker` group. Do not work as root.
-- Installed: git, tmux, htop/btop, jq, ripgrep, fd, build-essential, Python 3 (pip, venv, pipx, uv),
-  Node.js 22, Docker + compose, gh, Claude Code, Codex (the last two unused: agents run locally).
-- Never commit secrets, codes or `.env` files; keep them in untracked files.
+The workflow (claim tasks, worktrees, shipping, shared demo) lives in the project repo's `AGENTS.md`
+(`hackathon/AGENTS.md`, slash commands `/start`, `/ship`, `/demo`). Read that, not this file.
+The VPS is the hub (central git `hack:/srv/hack/project.git`, shared demo, `~/hack/`, `~/hack/inbox/<user>/`,
+web file explorer); nobody runs coding agents on it (6 GB RAM shared). Never push to GitHub `DKeAlvaro/hackathon`.
+`pair` on the VPS is a shared tmux session. Open ports: 22, 80, 443, 3000-3999, 5000-5999, 8000-8999.
 
 ## Agent kit for the hackathon project
 
