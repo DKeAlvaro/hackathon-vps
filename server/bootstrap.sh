@@ -443,7 +443,7 @@ if [ -x "$FB" ]; then
   systemctl stop hack-files 2>/dev/null || true
   fb() { runuser -u hackweb -- "$FB" -d "$FB_DB" "$@"; }
   [ -f "$FB_DB" ] || fb config init >/dev/null
-  fb config set -a 127.0.0.1 -p 8791 -r /srv/hack -b "" --auth.method=proxy --auth.header=X-Remote-User --branding.name hackathon --hideDotfiles >/dev/null \
+  fb config set -a 127.0.0.1 -p 8791 -r /srv/hack -b "" --auth.method=proxy --auth.header=X-Remote-User --branding.name hackathon --hideDotfiles --fileMode 0o664 --dirMode 0o775 >/dev/null \
     || warn "filebrowser config set failed"
   existing_fb="$(fb users ls 2>/dev/null || true)"
   for u in "${TEAM_USERS[@]}"; do
@@ -452,9 +452,10 @@ if [ -x "$FB" ]; then
       adm=""
       [ "$u" = alvaro ] && adm="--perm.admin"
       # shellcheck disable=SC2086
-      fb users add "$u" "$pw" $adm --perm.create --perm.rename --perm.modify --perm.delete --perm.share --perm.download >/dev/null \
+      fb users add "$u" "$pw" $adm --hideDotfiles --perm.create --perm.rename --perm.modify --perm.delete --perm.share --perm.download >/dev/null \
         || warn "filebrowser: could not add user $u"
     fi
+    fb users update "$u" --hideDotfiles >/dev/null 2>&1 || true
   done
 fi
 cat > /etc/systemd/system/hack-files.service <<'EOF'
