@@ -24,9 +24,8 @@ fi
 
 if [ "${HACK_MIRROR:-1}" != "0" ] && git --git-dir="$BARE" remote get-url "$REMOTE" >/dev/null 2>&1; then
   (
-    out="$(git --git-dir="$BARE" push -q --prune "$REMOTE" 'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*' 2>&1 </dev/null)"       || { printf '%s mirror push failed:
-%s
-' "$(date -Is)" "$out" >>"$LOG"; }
+    out="$(git --git-dir="$BARE" push -q --prune "$REMOTE" 'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*' 2>&1 </dev/null)" \
+      || printf '%s mirror push failed:\n%s\n' "$(date -Is)" "$out" >>"$LOG"
   ) >/dev/null 2>&1 </dev/null &
 fi
 exit 0
