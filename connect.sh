@@ -156,7 +156,9 @@ BODY_FILE="$(mktemp)"
 RESP_FILE="$(mktemp)"
 trap 'rm -f "$BODY_FILE" "$RESP_FILE"' EXIT
 printf '{"user":"%s","code":"%s","pubkey":"%s"}' "$USERNAME" "$CODE" "$(json_escape "$PUBKEY")" > "$BODY_FILE"
-HTTP="$(curl -sS --max-time 20 -o "$RESP_FILE" -w '%{http_code}' -H 'Content-Type: application/json' \
+# Resolve the web host to HOST_IP ourselves: some ISP resolvers block sslip.io. HTTPS stays valid.
+WEB_HOST="${WEB_URL#*://}"; WEB_HOST="${WEB_HOST%%/*}"; WEB_HOST="${WEB_HOST%%:*}"
+HTTP="$(curl -sS --max-time 20 --resolve "$WEB_HOST:443:$HOST_IP" -o "$RESP_FILE" -w '%{http_code}' -H 'Content-Type: application/json' \
   --data-binary "@$BODY_FILE" "$WEB_URL/join" 2>/dev/null || true)"
 RESP="$(tr -d '\r\n' < "$RESP_FILE" 2>/dev/null || true)"
 case "$HTTP" in

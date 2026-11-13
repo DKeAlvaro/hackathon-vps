@@ -26,4 +26,12 @@ foreach ($p in $Paths) {
 $argList = @('-r', '--') + $resolved + @("hack:hack/inbox/$User/")
 & scp @argList
 if ($LASTEXITCODE -ne 0) { Write-Host 'scp failed.'; exit 1 }
+# scp keeps the source mode (e.g. 644): make the copies group-writable so teammates can edit them.
+foreach ($r in $resolved) {
+    $name = Split-Path -Leaf $r
+    $dest = "hack/inbox/$User/$name"
+    $q = "'" + ($dest -replace "'", "'\''") + "'"
+    & ssh hack "chmod -R g+rwX $q"
+    if ($LASTEXITCODE -ne 0) { Write-Host "warning: could not chmod $dest" }
+}
 Write-Host "Sent. On the VPS: ~/hack/inbox/$User/   (browse it with Files or Code on the web page)"

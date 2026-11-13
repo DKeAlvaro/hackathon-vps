@@ -104,6 +104,7 @@ Skills that assume agents run on the server do not apply: agents run locally.
   tries from one network the server blocks it for 10 minutes (429).
 - Cannot reach `WEB_URL`: no internet, the server is down, or bootstrap is still running. The first HTTPS
   certificate can take about 30 s after setup. Ask Alvaro.
+- Web links don't load or show a certificate/name warning: your network's DNS blocks sslip.io (seen on DNA in Finland). Set your DNS to 1.1.1.1 / 8.8.8.8 or use a phone hotspot. ssh, git and send don't depend on it; the connect script also works around it.
 - `REMOTE HOST IDENTIFICATION HAS CHANGED`: the server was reinstalled. Run `ssh-keygen -R <HOST_IP from hack.conf>`
   and try again.
 - Windows: `ssh` not found. In an administrator PowerShell:

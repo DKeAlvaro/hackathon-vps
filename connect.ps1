@@ -157,19 +157,39 @@ Step 4 "Registering your key at $WebUrl/join"
 $payload = (@{ user = $User; code = $Code; pubkey = $PubKey } | ConvertTo-Json -Compress)
 $status = 0
 $respText = ''
-try {
-    $resp = Invoke-WebRequest -Uri "$WebUrl/join" -Method Post -ContentType 'application/json' `
-        -Body ([System.Text.Encoding]::UTF8.GetBytes($payload)) -TimeoutSec 20 -UseBasicParsing
-    $status = [int]$resp.StatusCode
-    $respText = [string]$resp.Content
-} catch {
-    $ex = $_.Exception
-    if ($ex.Response) {
-        $status = [int]$ex.Response.StatusCode
-        try {
-            $sr = New-Object System.IO.StreamReader($ex.Response.GetResponseStream())
-            $respText = $sr.ReadToEnd()
-        } catch { }
+$curlExe = Get-Command curl.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($curlExe) {
+    # Resolve the web host to HostIp ourselves: some ISP resolvers block sslip.io. HTTPS stays valid.
+    $webHost = ([System.Uri]$WebUrl).Host
+    $bodyFile = [System.IO.Path]::GetTempFileName()
+    $respFile = [System.IO.Path]::GetTempFileName()
+    try {
+        [System.IO.File]::WriteAllBytes($bodyFile, (New-Object System.Text.UTF8Encoding($false)).GetBytes($payload))
+        $argLine = '-sS --max-time 20 --resolve ' + (Q "${webHost}:443:$HostIp") + ' -o ' + (Q $respFile) +
+            ' -w "%{http_code}" -H "Content-Type: application/json" --data-binary ' + (Q "@$bodyFile") + ' ' + (Q "$WebUrl/join")
+        $r = Invoke-Native $curlExe.Source $argLine -Capture
+        $code = 0
+        [void][int]::TryParse(($r.Out -replace '\D', ''), [ref]$code)
+        $status = $code
+        if (Test-Path $respFile) { $respText = [System.IO.File]::ReadAllText($respFile) }
+    } finally {
+        Remove-Item -Force -ErrorAction SilentlyContinue $bodyFile, $respFile
+    }
+} else {
+    try {
+        $resp = Invoke-WebRequest -Uri "$WebUrl/join" -Method Post -ContentType 'application/json' `
+            -Body ([System.Text.Encoding]::UTF8.GetBytes($payload)) -TimeoutSec 20 -UseBasicParsing
+        $status = [int]$resp.StatusCode
+        $respText = [string]$resp.Content
+    } catch {
+        $ex = $_.Exception
+        if ($ex.Response) {
+            $status = [int]$ex.Response.StatusCode
+            try {
+                $sr = New-Object System.IO.StreamReader($ex.Response.GetResponseStream())
+                $respText = $sr.ReadToEnd()
+            } catch { }
+        }
     }
 }
 switch ($status) {
@@ -267,7 +287,7 @@ if (-not $NoProject) {
     $ProjectUrl = $env:HACK_PROJECT_URL
     if (-not $ProjectUrl) { $ProjectUrl = "${HostAlias}:/srv/hack/project.git" }
     if ($ProjectDir) {
-        $ProjectPath = [System.IO.Path]::GetFullPath((Join-Path $OrigDir $ProjectDir))
+        $ProjectPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($OrigDir, $ProjectDir))
     } else {
         $ProjectPath = Join-Path (Split-Path -Parent $Root) 'hackathon'
     }

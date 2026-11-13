@@ -80,6 +80,10 @@ clone. Nobody runs agents on the VPS: it has 6 GB RAM shared by 4 people.
 - Open ports: 22, 80, 443, 3000-3999, 5000-5999, 8000-8999. Docker-published ports bypass the firewall.
 - Passwordless `sudo`, member of `docker`. RAM is shared (6 GB): be kind.
 
+## Troubleshooting
+
+- Web links don't load or show a certificate/name warning: your network's DNS blocks sslip.io (seen on DNA in Finland). Set your DNS to 1.1.1.1 / 8.8.8.8 or use a phone hotspot. ssh, git and send don't depend on it; the connect script also works around it.
+
 ## Do not commit secrets
 
 This repo is public. Never commit codes, passwords, API keys, `.env` files or private keys.

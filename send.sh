@@ -14,4 +14,11 @@ USERNAME=""
 for p in "$@"; do [ -e "$p" ] || { echo "Not found: $p" >&2; exit 1; }; done
 
 scp -r -- "$@" "hack:hack/inbox/$USERNAME/"
+# scp keeps the source mode (e.g. 644): make the copies group-writable so teammates can edit them.
+for p in "$@"; do
+  dest="hack/inbox/$USERNAME/$(basename -- "$p")"
+  sq="'"; rep="'\''"
+  qd="'${dest//$sq/$rep}'"
+  ssh hack "chmod -R g+rwX $qd" || echo "warning: could not chmod $dest" >&2
+done
 echo "Sent. On the VPS: ~/hack/inbox/$USERNAME/   (browse it with Files or Code on the web page)"
