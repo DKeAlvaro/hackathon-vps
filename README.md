@@ -56,7 +56,7 @@ Files land in `~/hack/inbox/<you>/` on the VPS. Get files back with `scp -r hack
 ## How we work
 
 Everyone codes on their own machine with their own Claude Code in the local `hackathon` clone: `/start`, `/ship`,
-`/demo`. The workflow is in that repo's `AGENTS.md`. Nobody runs agents on the VPS (6 GB RAM shared by 4 people).
+`/demo`. The workflow is in that repo's `AGENTS.md`. Agents can also run on the VPS (Claude Code and Codex are installed; use tmux).
 
 ## On the server
 

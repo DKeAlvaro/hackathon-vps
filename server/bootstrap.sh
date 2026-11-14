@@ -155,7 +155,7 @@ This folder (/srv/hack, also ~/hack) is shared by the whole team.
              demo from here. Do not edit it; code on your own computer and push to origin.
 - project.git/  central git repo (origin of everyone's local clone: hack:/srv/hack/project.git).
              Pushes to main update project/ and are mirrored to GitHub DKeAlvaro/hackathon.
-- Nobody runs coding agents on this server (6 GB RAM): agents run on each person's own machine.
+- Claude Code and Codex are installed: agents can run here too (in tmux, in your own clone, never in project/).
 - inbox/<you>/  files sent from your laptop with send.sh / send.ps1
 - kit-agentes/  skills and AGENTS.md template for coding agents
 - Everyone in group `team` can read and write everything here (setgid + default ACLs).
@@ -537,9 +537,13 @@ $BASE {
 files.$BASE {
 	redir https://$BASE{uri} permanent
 }
+
+# Extra sites, one file each (e.g. /etc/caddy/sites/vela.caddy)
+import /etc/caddy/sites/*.caddy
 EOF
   }
 
+  mkdir -p /etc/caddy/sites
   cf_tmp="$(mktemp)"
   render_caddyfile > "$cf_tmp"
   if caddy validate --config "$cf_tmp" --adapter caddyfile >/dev/null 2>&1; then

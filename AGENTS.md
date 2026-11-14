@@ -38,7 +38,7 @@ keys or codes, and never register a key for anyone but the user you are helping.
 The workflow (claim tasks, worktrees, shipping, shared demo) lives in the project repo's `AGENTS.md`
 (`hackathon/AGENTS.md`, slash commands `/start`, `/ship`, `/demo`). Read that, not this file.
 The VPS is the hub (central git `hack:/srv/hack/project.git`, shared demo, `~/hack/`, `~/hack/inbox/<user>/`,
-web file explorer); nobody runs coding agents on it (6 GB RAM shared). Never push to GitHub `DKeAlvaro/hackathon`.
+web file explorer). Agents can run there too, in tmux, in your own clone (never in `~/hack/project`). Never push to GitHub `DKeAlvaro/hackathon`.
 `pair` on the VPS is a shared tmux session. Open ports: 22, 80, 443, 3000-3999, 5000-5999, 8000-8999.
 
 ## Agent kit for the hackathon project
@@ -49,7 +49,7 @@ Set it up once in the project so every agent shares the same rules:
 `mkdir -p .claude/skills && cp -r /srv/hack/kit-agentes/skills/* .claude/skills/ && cp /srv/hack/kit-agentes/plantillas/AGENTS.md .`
 then fill in `AGENTS.md` in the first hour and add a `CLAUDE.md` containing `@AGENTS.md`. Copy it to your own machine (`scp -r hack:/srv/hack/kit-agentes .`) or clone it from GitHub, commit the result
 to the project, and work in parallel with one local git worktree per agent (see the agentes-en-paralelo skill).
-Skills that assume agents run on the server do not apply: agents run locally.
+Agents run locally or on the VPS (in tmux, in your own clone under your home).
 
 ## Troubleshooting
 
